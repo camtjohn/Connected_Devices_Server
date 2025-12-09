@@ -5,14 +5,17 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"syscall"
-	"time"
+	"server_app/internal/devices"
 	"server_app/internal/mqtt_local"
 	"server_app/internal/weather"
+	"syscall"
+	"time"
+
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 )
 
 var zipcodes = []string{"78757", "60607"}
+var VERSION_NUM_STRING = "001"
 
 // Monitor current time set by ntpd at bootup. Only continue when time is updated
 func wait_for_current_time() {
@@ -54,13 +57,41 @@ var msg_handler MQTT.MessageHandler = func(client MQTT.Client, msg MQTT.Message)
 	payload := string(msg.Payload())
 
 	if topic == "dev_bootup" {
-		version_str := "01"
-		// Get weather for both zipcodes and publish
+		// Payload should contain device ID and zipcode separated by comma (e.g., "device_123,78757")
+		// Or just device ID if using pre-configured zipcodes
+		deviceID := payload
+		if deviceID == "" {
+			fmt.Println("Error: dev_bootup message missing device ID")
+			return
+		}
+
+		// Register device as active with a zipcode (use first zipcode from default list for now)
+		// In production, parse zipcode from payload or use stored config
+		devices.RegisterDevice(deviceID, zipcodes[0])
+
+		// Get and publish weather for this device's zipcode
 		for _, zip := range zipcodes {
 			update_weather("current_weather", zip)
 			update_weather("forecast_weather", zip)
+		} // Respond to device with current device SW version (informs device if need OTA)
+		mqtt_local.Publish(payload, VERSION_NUM_STRING)
+	}
+
+	// Device heartbeat - keep device marked as active
+	if topic == "dev_heartbeat" {
+		deviceID := payload
+		if deviceID != "" {
+			devices.Heartbeat(deviceID)
+			fmt.Printf("Heartbeat received from %s\n", deviceID)
 		}
-		mqtt_local.Publish(payload, version_str)
+	}
+
+	// Device Last Will Testament - triggered on ungraceful disconnect (network/power loss)
+	if topic == "device_offline" {
+		deviceID := payload
+		if deviceID != "" {
+			devices.SetInactive(deviceID)
+		}
 	}
 }
 
@@ -128,6 +159,12 @@ func pingHealthcheck(client *http.Client, url string) error {
 
 func main() {
 	fmt.Println("Starter up...")
+
+	// Initialize persistent device storage (single file)
+	if err := devices.InitStorage("./data/devices.json"); err != nil {
+		fmt.Printf("Warning: failed to initialize device storage: %v\n", err)
+	}
+
 	wait_for_current_time()
 
 	// Channel to signal when to stop process
@@ -142,6 +179,13 @@ func main() {
 
 	// Start mqtt process
 	mqtt_local.Create_client(msg_handler)
+
+	// Subscribe to device offline topic (Last Will Testament from devices)
+	mqtt_local.Subscribe("device_offline", msg_handler)
+
+	// Subscribe to heartbeat topic for device keepalives
+	mqtt_local.Subscribe("dev_heartbeat", msg_handler)
+
 	fmt.Println("Finished process initializing")
 
 	<-c // Block until signal received

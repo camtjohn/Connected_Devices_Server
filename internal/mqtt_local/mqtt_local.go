@@ -4,10 +4,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"time"
+
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 )
 
@@ -26,7 +26,7 @@ func Create_client(handler MQTT.MessageHandler) {
 	keyPath := "/home/ubuntu/server_app/certs/client_server.key"
 
 	// Load CA cert
-	caCert, err := ioutil.ReadFile(caPath)
+	caCert, err := os.ReadFile(caPath)
 	if err != nil {
 		log.Fatalf("Failed to read CA cert: %v", err)
 	}
@@ -42,10 +42,10 @@ func Create_client(handler MQTT.MessageHandler) {
 	}
 
 	tlsConfig := &tls.Config{
-		RootCAs:            caPool,
-		Certificates:       []tls.Certificate{cert},
+		RootCAs:      caPool,
+		Certificates: []tls.Certificate{cert},
 		//InsecureSkipVerify: false, // enforce CN/SAN match
-		MinVersion:         tls.VersionTLS12,
+		MinVersion: tls.VersionTLS12,
 	}
 
 	// set protocol, ip, and port of broker
