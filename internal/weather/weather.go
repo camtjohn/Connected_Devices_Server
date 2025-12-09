@@ -10,32 +10,40 @@ import (
 	"path/filepath"
 )
 
-var count_up int = 0
-
-var zipcode string = "78757"
 var country_code string = "US"
-var zip_string string = zipcode + "," + country_code
 
 // Weather Map api (current weather)
 var api_key string = "3836f65abd758ae760af5f75471fe0b1"
 var weather_url string = "https://api.openweathermap.org/data/2.5/weather?zip="
-var url_current_weather string = weather_url + zip_string + "&units=imperial" + "&appid=" + api_key
-var json_current_weather string = "/home/ubuntu/server_app/weather_data/current_weather.json"
 
 // Weather Bit api (forecast weather)
 var forecast_api_key string = "a7791992885c4e0bac7f5631377da381"
 var forecast_url string = "https://api.weatherbit.io/v2.0/forecast/daily?postal_code="
-var url_forecast_weather string = forecast_url + zip_string + "&units=I&key=" + forecast_api_key
-var json_forecast_weather string = "/home/ubuntu/server_app/weather_data/forecast_weather.json"
+
+// Helper function to build URLs for a given zipcode
+func buildWeatherUrls(zipcode string) (string, string) {
+	zip_string := zipcode + "," + country_code
+	url_current := weather_url + zip_string + "&units=imperial" + "&appid=" + api_key
+	url_forecast := forecast_url + zip_string + "&units=I&key=" + forecast_api_key
+	return url_current, url_forecast
+}
+
+// Helper function to get file paths for a given zipcode
+func getWeatherFilePaths(zipcode string) (string, string) {
+	json_current := "/home/ubuntu/server_app/internal/weather_data/current_weather_" + zipcode + ".json"
+	json_forecast := "/home/ubuntu/server_app/internal/weather_data/forecast_weather_" + zipcode + ".json"
+	return json_current, json_forecast
+}
 
 // PUBLIC METHODS
 
-func Get_weather(data_type string) []byte {
+func Get_weather(data_type string, zipcode string) []byte {
+	url_current, url_forecast := buildWeatherUrls(zipcode)
 	var url string
 	if data_type == "current_weather" {
-		url = url_current_weather
+		url = url_current
 	} else if data_type == "forecast_weather" {
-		url = url_forecast_weather
+		url = url_forecast
 	}
 
 	if url == "" {
@@ -69,12 +77,13 @@ func Get_weather(data_type string) []byte {
 }
 
 // Store weather data in json file
-func Store_weather(data_type string, weather_data []byte) {
+func Store_weather(data_type string, weather_data []byte, zipcode string) {
+	json_current, json_forecast := getWeatherFilePaths(zipcode)
 	var json_file string
 	if data_type == "current_weather" {
-		json_file = json_current_weather
+		json_file = json_current
 	} else if data_type == "forecast_weather" {
-		json_file = json_forecast_weather
+		json_file = json_forecast
 	}
 
 	if len(weather_data) == 0 {
@@ -107,12 +116,13 @@ func Store_weather(data_type string, weather_data []byte) {
 }
 
 // Retrieve data from json file
-func Read_weather(data_type string) string {
+func Read_weather(data_type string, zipcode string) string {
+	json_current, json_forecast := getWeatherFilePaths(zipcode)
 	var json_file string
 	if data_type == "current_weather" {
-		json_file = json_current_weather
+		json_file = json_current
 	} else if data_type == "forecast_weather" {
-		json_file = json_forecast_weather
+		json_file = json_forecast
 	}
 
 	file, err := os.Open(json_file)

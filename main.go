@@ -12,6 +12,8 @@ import (
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 )
 
+var zipcodes = []string{"78757", "60607"}
+
 // Monitor current time set by ntpd at bootup. Only continue when time is updated
 func wait_for_current_time() {
 	t := time.Now()
@@ -37,11 +39,11 @@ func update_weather(data_type string, zip string) {
 	// check freshness of json file. get/store new data if old.
 	// for now, get forecast at bootup (already got current)
 	if data_type == "forecast_weather" {
-		forecast_data := weather.Get_weather("forecast_weather")
-		weather.Store_weather("forecast_weather", forecast_data)
+		forecast_data := weather.Get_weather("forecast_weather", zip)
+		weather.Store_weather("forecast_weather", forecast_data, zip)
 		time.Sleep(1 * time.Second)
 	}
-	msg_payload := weather.Read_weather(data_type)
+	msg_payload := weather.Read_weather(data_type, zip)
 
 	mqtt_local.Publish(msg_topic, msg_payload)
 }
@@ -51,15 +53,13 @@ var msg_handler MQTT.MessageHandler = func(client MQTT.Client, msg MQTT.Message)
 	topic := string(msg.Topic())
 	payload := string(msg.Payload())
 
-	if topic == "test1" {
-		fmt.Println("recvd msg for test1", payload)
-	}
-
 	if topic == "dev_bootup" {
 		version_str := "01"
-		// At some point, Will get zip from payload and update weather for that zip
-		update_weather("current_weather", "49085")
-		update_weather("forecast_weather", "49085")
+		// Get weather for both zipcodes and publish
+		for _, zip := range zipcodes {
+			update_weather("current_weather", zip)
+			update_weather("forecast_weather", zip)
+		}
 		mqtt_local.Publish(payload, version_str)
 	}
 }
@@ -69,19 +69,23 @@ func task_weather() {
 	count_send_current := 0
 
 	for {
-		// Send current weather data to devices
-		weather_data := weather.Get_weather("current_weather")
-		weather.Store_weather("current_weather", weather_data)
-		time.Sleep(1 * time.Second)
-		update_weather("current_weather", "49085")
+		// Send current weather data to devices for all zipcodes
+		for _, zip := range zipcodes {
+			weather_data := weather.Get_weather("current_weather", zip)
+			weather.Store_weather("current_weather", weather_data, zip)
+			time.Sleep(1 * time.Second)
+			update_weather("current_weather", zip)
+		}
 
 		// Send forecast every 6 hours = 12 times publishing current weather
 		count_send_current++
 		if count_send_current > 12 {
-			forecast_data := weather.Get_weather("forecast_weather")
-			weather.Store_weather("forecast_weather", forecast_data)
-			time.Sleep(1 * time.Second)
-			update_weather("forecast_weather", "49085")
+			for _, zip := range zipcodes {
+				forecast_data := weather.Get_weather("forecast_weather", zip)
+				weather.Store_weather("forecast_weather", forecast_data, zip)
+				time.Sleep(1 * time.Second)
+				update_weather("forecast_weather", zip)
+			}
 			count_send_current = 0
 		}
 
