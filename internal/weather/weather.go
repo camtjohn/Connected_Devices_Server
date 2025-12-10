@@ -3,14 +3,35 @@ package weather
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math"
 	"net/http"
-	"os"
-	"path/filepath"
+	"server_app/internal/storage"
+	"sync"
+	"time"
 )
 
 var country_code string = "US"
+
+type WeatherData struct {
+	Zipcode         string          `json:"zipcode"`
+	CurrentWeather  json.RawMessage `json:"current_weather"`
+	ForecastWeather json.RawMessage `json:"forecast_weather"`
+	LastUpdated     string          `json:"last_updated"`
+}
+
+var store *storage.Manager
+var mu sync.RWMutex
+
+func InitWeatherStorage(dataFilePath string) error {
+	var err error
+	store, err = storage.New(dataFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to initialize weather storage: %v", err)
+	}
+	fmt.Printf("Initialized weather storage\n")
+	return nil
+}
 
 // Weather Map api (current weather)
 var api_key string = "3836f65abd758ae760af5f75471fe0b1"
@@ -26,13 +47,6 @@ func buildWeatherUrls(zipcode string) (string, string) {
 	url_current := weather_url + zip_string + "&units=imperial" + "&appid=" + api_key
 	url_forecast := forecast_url + zip_string + "&units=I&key=" + forecast_api_key
 	return url_current, url_forecast
-}
-
-// Helper function to get file paths for a given zipcode
-func getWeatherFilePaths(zipcode string) (string, string) {
-	json_current := "/home/ubuntu/server_app/internal/weather_data/current_weather_" + zipcode + ".json"
-	json_forecast := "/home/ubuntu/server_app/internal/weather_data/forecast_weather_" + zipcode + ".json"
-	return json_current, json_forecast
 }
 
 // PUBLIC METHODS
@@ -67,7 +81,7 @@ func Get_weather(data_type string, zipcode string) []byte {
 		return nil
 	}
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Println("Get_weather: ReadAll error:", err)
 		return nil
@@ -76,65 +90,70 @@ func Get_weather(data_type string, zipcode string) []byte {
 	return body
 }
 
-// Store weather data in json file
+// Store weather data using storage manager
 func Store_weather(data_type string, weather_data []byte, zipcode string) {
-	json_current, json_forecast := getWeatherFilePaths(zipcode)
-	var json_file string
-	if data_type == "current_weather" {
-		json_file = json_current
-	} else if data_type == "forecast_weather" {
-		json_file = json_forecast
-	}
-
 	if len(weather_data) == 0 {
 		fmt.Println("Store_weather: no data to store for", data_type)
 		return
 	}
-
-	// Ensure parent directory exists
-	dir := filepath.Dir(json_file)
-	if dir != "" {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			fmt.Println("Store_weather: MkdirAll error:", err)
-			// continue, try to create file anyway
-		}
-	}
-
-	// Create json file
-	file, err := os.Create(json_file)
-	if err != nil {
-		fmt.Println("Store_weather: Error creating json file:", err)
+	if store == nil {
+		fmt.Println("Store_weather: storage not initialized")
 		return
 	}
-	defer file.Close()
 
-	// Write to file
-	_, err = file.Write(weather_data)
-	if err != nil {
-		fmt.Println("Store_weather: Error writing to json file:", err)
+	mu.Lock()
+	defer mu.Unlock()
+
+	var data WeatherData
+	if val, exists := store.Get(zipcode); exists {
+		jsonBytes, _ := json.Marshal(val)
+		json.Unmarshal(jsonBytes, &data)
+	}
+
+	data.Zipcode = zipcode
+	if data_type == "current_weather" {
+		data.CurrentWeather = json.RawMessage(weather_data)
+	} else if data_type == "forecast_weather" {
+		data.ForecastWeather = json.RawMessage(weather_data)
+	}
+	data.LastUpdated = time.Now().Format(time.RFC3339)
+
+	if err := store.Set(zipcode, data); err != nil {
+		fmt.Println("Store_weather: error storing weather:", err)
 	}
 }
 
-// Retrieve data from json file
+// Retrieve weather data and convert to message format
 func Read_weather(data_type string, zipcode string) string {
-	json_current, json_forecast := getWeatherFilePaths(zipcode)
-	var json_file string
-	if data_type == "current_weather" {
-		json_file = json_current
-	} else if data_type == "forecast_weather" {
-		json_file = json_forecast
-	}
-
-	file, err := os.Open(json_file)
-	if err != nil {
-		fmt.Println("Read_weather: Error opening json file:", err)
+	if store == nil {
+		fmt.Println("Read_weather: storage not initialized")
 		return ""
 	}
-	defer file.Close()
 
-	byteValue, err := ioutil.ReadAll(file)
-	if err != nil {
-		fmt.Println("Read_weather: Error reading json file:", err)
+	mu.RLock()
+	defer mu.RUnlock()
+
+	var byteValue []byte
+	if val, exists := store.Get(zipcode); exists {
+		var data WeatherData
+		jsonBytes, _ := json.Marshal(val)
+		json.Unmarshal(jsonBytes, &data)
+
+		if data_type == "current_weather" {
+			byteValue = data.CurrentWeather
+		} else if data_type == "forecast_weather" {
+			byteValue = data.ForecastWeather
+		} else {
+			fmt.Println("Read_weather: unknown data type:", data_type)
+			return ""
+		}
+	} else {
+		fmt.Println("Read_weather: no weather data found for zipcode:", zipcode)
+		return ""
+	}
+
+	if len(byteValue) == 0 {
+		fmt.Println("Read_weather: no", data_type, "data for zipcode:", zipcode)
 		return ""
 	}
 
