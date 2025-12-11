@@ -66,40 +66,37 @@ func InitStorage(dataFilePath string) error {
 }
 
 // RegisterDevice sets device as active on bootup message and saves to persistent storage
-// If deviceName differs from stored name, updates the stored entry
-func RegisterDevice(deviceID string, deviceName string, zipcode string) {
+// Uses deviceName as the unique device ID
+func RegisterDevice(deviceName string, zipcode string) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
 	var storedZipcode string
-	var name string
 
 	// Check if we have stored data for this device
-	if storedDevice, exists := manager.devices[deviceID]; exists {
+	if storedDevice, exists := manager.devices[deviceName]; exists {
 		storedZipcode = storedDevice.Zipcode
-		name = deviceName // Use new name from bootup message
-		if name != storedDevice.Name {
-			fmt.Printf("Device %s name changed from '%s' to '%s'\n", deviceID, storedDevice.Name, name)
+		if storedZipcode != zipcode {
+			fmt.Printf("Device %s zipcode changed from '%s' to '%s'\n", deviceName, storedZipcode, zipcode)
+			storedZipcode = zipcode // Use new zipcode from bootup message
 		}
-		fmt.Printf("Device %s reconnected, using stored zipcode: %s\n", deviceID, storedZipcode)
+		fmt.Printf("Device %s reconnected, zipcode: %s\n", deviceName, storedZipcode)
 	} else {
-		// First time seeing this device, use provided name and zipcode
+		// First time seeing this device, use provided zipcode
 		storedZipcode = zipcode
-		name = deviceName
-		fmt.Printf("Device %s ('%s') registered with zipcode: %s\n", deviceID, name, storedZipcode)
+		fmt.Printf("Device %s registered with zipcode: %s\n", deviceName, storedZipcode)
 	}
 
-	if device, exists := manager.devices[deviceID]; exists {
+	if device, exists := manager.devices[deviceName]; exists {
 		// Device already in memory, update it
 		device.Active = true
 		device.LastSeen = time.Now()
 		device.Zipcode = storedZipcode
-		device.Name = name
 	} else {
 		// New device in memory
-		manager.devices[deviceID] = &Device{
-			ID:       deviceID,
-			Name:     name,
+		manager.devices[deviceName] = &Device{
+			ID:       deviceName,
+			Name:     deviceName,
 			Zipcode:  storedZipcode,
 			LastSeen: time.Now(),
 			Active:   true,
@@ -107,7 +104,7 @@ func RegisterDevice(deviceID string, deviceName string, zipcode string) {
 	}
 
 	// Update in persistent storage
-	saveDeviceToStorage(deviceID)
+	saveDeviceToStorage(deviceName)
 }
 
 // SetInactive marks device as inactive (e.g., on LWT)
@@ -161,6 +158,25 @@ func IsZipcodeActive(zipcode string) bool {
 		}
 	}
 	return false
+}
+
+// GetActiveZipcodes returns unique zipcodes for all active devices
+func GetActiveZipcodes() []string {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+
+	zipcodeMap := make(map[string]bool)
+	for _, device := range manager.devices {
+		if device.Active {
+			zipcodeMap[device.Zipcode] = true
+		}
+	}
+
+	zipcodes := make([]string, 0, len(zipcodeMap))
+	for zipcode := range zipcodeMap {
+		zipcodes = append(zipcodes, zipcode)
+	}
+	return zipcodes
 }
 
 // GetDevice returns a specific device's info

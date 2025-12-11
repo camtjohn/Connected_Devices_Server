@@ -13,7 +13,7 @@ import (
 
 var client MQTT.Client
 
-func Create_client(handler MQTT.MessageHandler) {
+func Create_client(handler MQTT.MessageHandler, initialTopics []string) {
 	fmt.Println("Starting create client")
 
 	broker := "ssl://localhost:8883"
@@ -21,9 +21,9 @@ func Create_client(handler MQTT.MessageHandler) {
 	hostname, _ := os.Hostname()
 	clientID := "go-server-" + hostname
 
-	caPath := "/home/ubuntu/server_app/certs/ca.crt"
-	certPath := "/home/ubuntu/server_app/certs/client_server.crt"
-	keyPath := "/home/ubuntu/server_app/certs/client_server.key"
+	caPath := "./certs/ca.crt"
+	certPath := "./certs/client_server.crt"
+	keyPath := "./certs/client_server.key"
 
 	// Load CA cert
 	caCert, err := os.ReadFile(caPath)
@@ -68,8 +68,7 @@ func Create_client(handler MQTT.MessageHandler) {
 	opts.OnConnect = func(c MQTT.Client) {
 		fmt.Println("Connected to MQTT broker, subscribing to topics...")
 
-		topics := []string{"test1", "dev_bootup"}
-		for _, topic := range topics {
+		for _, topic := range initialTopics {
 			if token := c.Subscribe(topic, 1, handler); token.Wait() && token.Error() != nil {
 				log.Printf("Failed to subscribe to %s: %v", topic, token.Error())
 			} else {

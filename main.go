@@ -39,7 +39,7 @@ func wait_for_current_time() {
 
 // Read/publish weather
 func update_weather(data_type string, zip string) {
-	msg_topic := ("weather" + zip)
+	msg_topic := (TopicWeatherPrefix + zip)
 	// check freshness of json file. get/store new data if old.
 	// for now, get forecast at bootup (already got current)
 	if data_type == "forecast_weather" {
@@ -57,52 +57,39 @@ var msg_handler MQTT.MessageHandler = func(client MQTT.Client, msg MQTT.Message)
 	topic := string(msg.Topic())
 	payload := string(msg.Payload())
 
-	if topic == "dev_bootup" {
-		// Parse payload format: "device_id,device_name" or "device_id,device_name,zipcode"
-		// Example: "device_123,Living Room Sensor" or "device_123,Bedroom,78757"
-		var deviceID, deviceName, zipcode string
+	if topic == TopicBootup {
+		// Parse payload format: "device_name,zipcode"
+		// Example: "dev001,78757"
+		var deviceName, zipcode string
 
 		// Parse the payload
 		parts := strings.Split(payload, ",")
-		if len(parts) < 2 {
-			fmt.Println("Error: dev_bootup message format should be 'device_id,device_name' or 'device_id,device_name,zipcode'")
+		if len(parts) < 1 {
+			fmt.Println("Error: dev_bootup message format should be 'device_name' with optional zipcode")
 			return
 		}
 
-		deviceID = strings.TrimSpace(parts[0])
-		deviceName = strings.TrimSpace(parts[1])
+		deviceName = strings.TrimSpace(parts[0])
+		zipcode = strings.TrimSpace(parts[1])
 
-		if deviceID == "" || deviceName == "" {
-			fmt.Println("Error: dev_bootup message has empty device ID or name")
+		if deviceName == "" {
+			fmt.Println("Error: dev_bootup message has empty device name or zipcode")
 			return
 		}
 
-		// Parse zipcode if provided, otherwise use default
-		if len(parts) >= 3 {
-			zipcode = strings.TrimSpace(parts[2])
-		} else {
-			zipcode = zipcodes[0]
-		}
+		// Register device as active with zipcode
+		devices.RegisterDevice(deviceName, zipcode)
 
-		// Register device as active with name and zipcode
-		devices.RegisterDevice(deviceID, deviceName, zipcode)
-
-		// Get and publish weather only for active zipcodes (avoid duplicate fetches)
-		fetchedZipcodes := make(map[string]bool)
-		for _, zip := range zipcodes {
-			if !fetchedZipcodes[zip] && devices.IsZipcodeActive(zip) {
-				update_weather("current_weather", zip)
-				update_weather("forecast_weather", zip)
-				fetchedZipcodes[zip] = true
-			}
-		}
+		// Get and publish weather for this device's zipcode
+		update_weather("current_weather", zipcode)
+		update_weather("forecast_weather", zipcode)
 
 		// Respond to device with current device SW version (informs device if need OTA)
-		mqtt_local.Publish(payload, VERSION_NUM_STRING)
+		mqtt_local.Publish(deviceName, VERSION_NUM_STRING)
 	}
 
 	// Device heartbeat - keep device marked as active
-	if topic == "dev_heartbeat" {
+	if topic == TopicHeartbeat {
 		deviceID := payload
 		if deviceID != "" {
 			devices.Heartbeat(deviceID)
@@ -111,7 +98,7 @@ var msg_handler MQTT.MessageHandler = func(client MQTT.Client, msg MQTT.Message)
 	}
 
 	// Device Last Will Testament - triggered on ungraceful disconnect (network/power loss)
-	if topic == "device_offline" {
+	if topic == TopicOffline {
 		deviceID := payload
 		if deviceID != "" {
 			devices.SetInactive(deviceID)
@@ -124,34 +111,34 @@ func task_weather() {
 	count_send_current := 0
 
 	for {
-		// Send current weather data to devices for active zipcodes only
-		for _, zip := range zipcodes {
-			// Only fetch and publish weather if at least one device with this zipcode is active
-			if !devices.IsZipcodeActive(zip) {
-				fmt.Printf("Skipping weather update for %s (no active devices)\n", zip)
-				continue
-			}
+		// Get zipcodes from active devices
+		activeZipcodes := devices.GetActiveZipcodes()
 
-			weather_data := weather.Get_weather("current_weather", zip)
-			weather.Store_weather("current_weather", weather_data, zip)
-			time.Sleep(1 * time.Second)
-			update_weather("current_weather", zip)
+		if len(activeZipcodes) == 0 {
+			fmt.Println("No active devices, skipping weather update")
+		} else {
+			// Send current weather data for all active device zipcodes
+			for _, zip := range activeZipcodes {
+				weather_data := weather.Get_weather("current_weather", zip)
+				weather.Store_weather("current_weather", weather_data, zip)
+				time.Sleep(1 * time.Second)
+				update_weather("current_weather", zip)
+			}
 		}
 
 		// Send forecast every 6 hours = 12 times publishing current weather
 		count_send_current++
 		if count_send_current > 12 {
-			for _, zip := range zipcodes {
-				// Only fetch and publish forecast if at least one device with this zipcode is active
-				if !devices.IsZipcodeActive(zip) {
-					fmt.Printf("Skipping forecast update for %s (no active devices)\n", zip)
-					continue
+			activeZipcodes := devices.GetActiveZipcodes()
+			if len(activeZipcodes) == 0 {
+				fmt.Println("No active devices, skipping forecast update")
+			} else {
+				for _, zip := range activeZipcodes {
+					forecast_data := weather.Get_weather("forecast_weather", zip)
+					weather.Store_weather("forecast_weather", forecast_data, zip)
+					time.Sleep(1 * time.Second)
+					update_weather("forecast_weather", zip)
 				}
-
-				forecast_data := weather.Get_weather("forecast_weather", zip)
-				weather.Store_weather("forecast_weather", forecast_data, zip)
-				time.Sleep(1 * time.Second)
-				update_weather("forecast_weather", zip)
 			}
 			count_send_current = 0
 		}
@@ -193,8 +180,22 @@ func pingHealthcheck(client *http.Client, url string) error {
 	return nil
 }
 
+func start_mqtt_process() {
+	mqtt_local.Create_client(msg_handler, []string{TopicBootup, TopicTest})
+
+	// Subscribe to device offline topic (Last Will Testament from devices)
+	mqtt_local.Subscribe(TopicOffline, msg_handler)
+	// Subscribe to heartbeat topic for device keepalives
+	mqtt_local.Subscribe(TopicHeartbeat, msg_handler)
+}
+
 func main() {
-	fmt.Println("Starter up...")
+	if IsDebugBuild {
+		fmt.Println("Starting up... [DEBUG BUILD]")
+		fmt.Printf("Using debug topics: %s, %s, %s, %s\n", TopicBootup, TopicHeartbeat, TopicOffline, TopicWeatherPrefix)
+	} else {
+		fmt.Println("Starting up... [PRODUCTION BUILD]")
+	}
 
 	// Initialize persistent device storage (single file)
 	if err := devices.InitStorage("./data/devices.json"); err != nil {
@@ -216,14 +217,7 @@ func main() {
 	// Get weather every x minutes
 	go task_weather()
 
-	// Start mqtt process
-	mqtt_local.Create_client(msg_handler)
-
-	// Subscribe to device offline topic (Last Will Testament from devices)
-	mqtt_local.Subscribe("device_offline", msg_handler)
-
-	// Subscribe to heartbeat topic for device keepalives
-	mqtt_local.Subscribe("dev_heartbeat", msg_handler)
+	start_mqtt_process()
 
 	fmt.Println("Finished process initializing")
 
