@@ -37,19 +37,101 @@ func wait_for_current_time() {
 	}
 }
 
-// Read/publish weather
-func update_weather(data_type string, zip string) {
-	msg_topic := (TopicWeatherPrefix + zip)
-	// check freshness of json file. get/store new data if old.
-	// for now, get forecast at bootup (already got current)
-	if data_type == "forecast_weather" {
-		forecast_data := weather.Get_weather("forecast_weather", zip)
-		weather.Store_weather("forecast_weather", forecast_data, zip)
-		time.Sleep(1 * time.Second)
+// Fetch and store weather data
+func fetch_weather(data_type string, zip string) {
+	weather_data := weather.FetchWeatherFromAPI(data_type, zip)
+	if len(weather_data) > 0 {
+		weather.Store_weather(data_type, weather_data, zip)
+		fmt.Printf("Fetched and stored %s for %s\n", data_type, zip)
 	}
+}
+
+// Check if weather data is valid (recently updated)
+func is_weather_valid(data_type string, zip string) bool {
+	val, exists := weather.GetStoredWeatherData(zip)
+	if !exists {
+		return false
+	}
+
+	// Parse last updated time and set validity period based on data type
+	var lastUpdated time.Time
+	var validityPeriod time.Duration
+	var err error
+
+	if data_type == "current_weather" {
+		lastUpdated, err = time.Parse(time.RFC3339, val.CurrentWeatherUpdated)
+		validityPeriod = time.Duration(WeatherValidityPeriod) * time.Minute
+	} else if data_type == "forecast_weather" {
+		lastUpdated, err = time.Parse(time.RFC3339, val.ForecastWeatherUpdated)
+		validityPeriod = time.Duration(ForecastValidityPeriod) * time.Minute
+	} else {
+		return false
+	}
+
+	if err != nil {
+		fmt.Printf("Warning: could not parse weather timestamp: %v\n", err)
+		return false
+	}
+
+	return time.Since(lastUpdated) <= validityPeriod
+}
+
+// Publish weather via MQTT if valid
+func publish_weather(data_type string, zip string) {
+	if !is_weather_valid(data_type, zip) {
+		fmt.Printf("Skipping publish: %s for %s not valid (too old)\n", data_type, zip)
+		return
+	}
+
+	msg_topic := (TopicWeatherPrefix + zip)
 	msg_payload := weather.Read_weather(data_type, zip)
 
-	mqtt_local.Publish(msg_topic, msg_payload)
+	if msg_payload != "" {
+		mqtt_local.Publish(msg_topic, msg_payload)
+	}
+}
+
+// Handle device bootup: register device, fetch/publish weather, send version
+func handle_device_bootup(payload string) {
+	// Parse payload format: "device_name,zipcode"
+	parts := strings.Split(payload, ",")
+	if len(parts) < 2 {
+		fmt.Println("Error: dev_bootup format should be 'device_name,zipcode'")
+		return
+	}
+
+	deviceName := strings.TrimSpace(parts[0])
+	zipcode := strings.TrimSpace(parts[1])
+
+	if deviceName == "" || zipcode == "" {
+		fmt.Println("Error: dev_bootup has empty device name or zipcode")
+		return
+	}
+
+	// Register device as active
+	devices.RegisterDevice(deviceName, zipcode)
+
+	// Fetch weather only if not already valid
+	if !is_weather_valid("current_weather", zipcode) {
+		fetch_weather("current_weather", zipcode)
+	} else {
+		fmt.Printf("Current weather for %s is already valid, skipping fetch\n", zipcode)
+	}
+
+	if !is_weather_valid("forecast_weather", zipcode) {
+		fetch_weather("forecast_weather", zipcode)
+	} else {
+		fmt.Printf("Forecast for %s is already valid, skipping fetch\n", zipcode)
+	}
+
+	time.Sleep(1 * time.Second)
+
+	// Publish weather to device
+	publish_weather("current_weather", zipcode)
+	publish_weather("forecast_weather", zipcode)
+
+	// Send version info for OTA check
+	mqtt_local.Publish(deviceName, VERSION_NUM_STRING)
 }
 
 // Handler responds to mqtt messages for following topics
@@ -58,34 +140,7 @@ var msg_handler MQTT.MessageHandler = func(client MQTT.Client, msg MQTT.Message)
 	payload := string(msg.Payload())
 
 	if topic == TopicBootup {
-		// Parse payload format: "device_name,zipcode"
-		// Example: "dev001,78757"
-		var deviceName, zipcode string
-
-		// Parse the payload
-		parts := strings.Split(payload, ",")
-		if len(parts) < 1 {
-			fmt.Println("Error: dev_bootup message format should be 'device_name' with optional zipcode")
-			return
-		}
-
-		deviceName = strings.TrimSpace(parts[0])
-		zipcode = strings.TrimSpace(parts[1])
-
-		if deviceName == "" {
-			fmt.Println("Error: dev_bootup message has empty device name or zipcode")
-			return
-		}
-
-		// Register device as active with zipcode
-		devices.RegisterDevice(deviceName, zipcode)
-
-		// Get and publish weather for this device's zipcode
-		update_weather("current_weather", zipcode)
-		update_weather("forecast_weather", zipcode)
-
-		// Respond to device with current device SW version (informs device if need OTA)
-		mqtt_local.Publish(deviceName, VERSION_NUM_STRING)
+		handle_device_bootup(payload)
 	}
 
 	// Device heartbeat - keep device marked as active
@@ -108,42 +163,40 @@ var msg_handler MQTT.MessageHandler = func(client MQTT.Client, msg MQTT.Message)
 
 // Update weather every x minutes
 func task_weather() {
-	count_send_current := 0
+	ticker := time.NewTicker(time.Duration(WeatherUpdateInterval) * time.Minute)
+	forecastTicker := time.NewTicker(time.Duration(ForecastUpdateInterval) * time.Minute)
+	defer ticker.Stop()
+	defer forecastTicker.Stop()
 
 	for {
-		// Get zipcodes from active devices
-		activeZipcodes := devices.GetActiveZipcodes()
-
-		if len(activeZipcodes) == 0 {
-			fmt.Println("No active devices, skipping weather update")
-		} else {
-			// Send current weather data for all active device zipcodes
-			for _, zip := range activeZipcodes {
-				weather_data := weather.Get_weather("current_weather", zip)
-				weather.Store_weather("current_weather", weather_data, zip)
-				time.Sleep(1 * time.Second)
-				update_weather("current_weather", zip)
-			}
-		}
-
-		// Send forecast every 6 hours = 12 times publishing current weather
-		count_send_current++
-		if count_send_current > 12 {
+		select {
+		case <-ticker.C:
+			// Fetch current weather for all active device zipcodes
 			activeZipcodes := devices.GetActiveZipcodes()
+
 			if len(activeZipcodes) == 0 {
-				fmt.Println("No active devices, skipping forecast update")
+				fmt.Println("No active devices, skipping weather fetch")
 			} else {
+				fmt.Printf("Fetching current weather for %d zipcode(s)\n", len(activeZipcodes))
 				for _, zip := range activeZipcodes {
-					forecast_data := weather.Get_weather("forecast_weather", zip)
-					weather.Store_weather("forecast_weather", forecast_data, zip)
+					fetch_weather("current_weather", zip)
 					time.Sleep(1 * time.Second)
-					update_weather("forecast_weather", zip)
 				}
 			}
-			count_send_current = 0
-		}
 
-		time.Sleep(30 * time.Minute)
+		case <-forecastTicker.C:
+			// Fetch forecast for all active device zipcodes
+			activeZipcodes := devices.GetActiveZipcodes()
+			if len(activeZipcodes) == 0 {
+				fmt.Println("No active devices, skipping forecast fetch")
+			} else {
+				fmt.Printf("Fetching forecast for %d zipcode(s)\n", len(activeZipcodes))
+				for _, zip := range activeZipcodes {
+					fetch_weather("forecast_weather", zip)
+					time.Sleep(1 * time.Second)
+				}
+			}
+		}
 	}
 }
 
@@ -192,7 +245,6 @@ func start_mqtt_process() {
 func main() {
 	if IsDebugBuild {
 		fmt.Println("Starting up... [DEBUG BUILD]")
-		fmt.Printf("Using debug topics: %s, %s, %s, %s\n", TopicBootup, TopicHeartbeat, TopicOffline, TopicWeatherPrefix)
 	} else {
 		fmt.Println("Starting up... [PRODUCTION BUILD]")
 	}

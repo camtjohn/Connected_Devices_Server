@@ -14,10 +14,11 @@ import (
 var country_code string = "US"
 
 type WeatherData struct {
-	Zipcode         string          `json:"zipcode"`
-	CurrentWeather  json.RawMessage `json:"current_weather"`
-	ForecastWeather json.RawMessage `json:"forecast_weather"`
-	LastUpdated     string          `json:"last_updated"`
+	Zipcode                string          `json:"zipcode"`
+	CurrentWeather         json.RawMessage `json:"current_weather"`
+	ForecastWeather        json.RawMessage `json:"forecast_weather"`
+	CurrentWeatherUpdated  string          `json:"current_weather_updated"`
+	ForecastWeatherUpdated string          `json:"forecast_weather_updated"`
 }
 
 var store *storage.Manager
@@ -49,9 +50,8 @@ func buildWeatherUrls(zipcode string) (string, string) {
 	return url_current, url_forecast
 }
 
-// PUBLIC METHODS
-
-func Get_weather(data_type string, zipcode string) []byte {
+// FetchWeatherFromAPI retrieves weather data from the API
+func FetchWeatherFromAPI(data_type string, zipcode string) []byte {
 	url_current, url_forecast := buildWeatherUrls(zipcode)
 	var url string
 	if data_type == "current_weather" {
@@ -113,10 +113,11 @@ func Store_weather(data_type string, weather_data []byte, zipcode string) {
 	data.Zipcode = zipcode
 	if data_type == "current_weather" {
 		data.CurrentWeather = json.RawMessage(weather_data)
+		data.CurrentWeatherUpdated = time.Now().Format(time.RFC3339)
 	} else if data_type == "forecast_weather" {
 		data.ForecastWeather = json.RawMessage(weather_data)
+		data.ForecastWeatherUpdated = time.Now().Format(time.RFC3339)
 	}
-	data.LastUpdated = time.Now().Format(time.RFC3339)
 
 	if err := store.Set(zipcode, data); err != nil {
 		fmt.Println("Store_weather: error storing weather:", err)
@@ -236,4 +237,23 @@ func assemble_str(data Forecast_weather, offset_from_today int) string {
 	}
 
 	return (high_temp_str + precip_str + moon_str)
+}
+
+// GetStoredWeatherData retrieves the full weather data struct for a zipcode from storage
+func GetStoredWeatherData(zipcode string) (WeatherData, bool) {
+	if store == nil {
+		return WeatherData{}, false
+	}
+
+	mu.RLock()
+	defer mu.RUnlock()
+
+	if val, exists := store.Get(zipcode); exists {
+		var data WeatherData
+		jsonBytes, _ := json.Marshal(val)
+		json.Unmarshal(jsonBytes, &data)
+		return data, true
+	}
+
+	return WeatherData{}, false
 }
