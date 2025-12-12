@@ -1,4 +1,4 @@
-package mqtt_local
+package messaging
 
 import (
 	"crypto/tls"
@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"server_app/internal/messaging"
 	"time"
 
 	MQTT "github.com/eclipse/paho.mqtt.golang"
@@ -100,9 +99,24 @@ func Publish(topic string, data []byte) {
 	}
 }
 
+// PublishRetained publishes a message with the retained flag set
+// Useful for last weather state so ESP32 devices get it immediately on connect
+func PublishRetained(topic string, data []byte) {
+	fmt.Printf("Publishing retained to %s\n", topic)
+	if client == nil || !client.IsConnected() {
+		log.Printf("MQTT client not connected; skipping publish to %s", topic)
+		return
+	}
+	token := client.Publish(topic, 1, true, data)
+	token.Wait()
+	if token.Error() != nil {
+		log.Printf("Publish error: %v", token.Error())
+	}
+}
+
 // DecodeAndLogMessage decodes binary protocol messages
 func DecodeAndLogMessage(data []byte) {
-	msgType, payload, err := messaging.DecodeMessage(data)
+	msgType, payload, err := DecodeMessage(data)
 	if err != nil {
 		log.Printf("Error decoding message: %v", err)
 		return

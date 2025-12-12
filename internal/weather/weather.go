@@ -124,119 +124,103 @@ func Store_weather(data_type string, weather_data []byte, zipcode string) {
 	}
 }
 
-// Retrieve weather data and convert to message format
-func Read_weather(data_type string, zipcode string) string {
+// GetCurrentWeatherTemp retrieves the current temperature as int8
+func GetCurrentWeatherTemp(zipcode string) (int8, error) {
 	if store == nil {
-		fmt.Println("Read_weather: storage not initialized")
-		return ""
+		return 0, fmt.Errorf("storage not initialized")
 	}
 
 	mu.RLock()
 	defer mu.RUnlock()
 
-	var byteValue []byte
-	if val, exists := store.Get(zipcode); exists {
-		var data WeatherData
-		jsonBytes, _ := json.Marshal(val)
-		json.Unmarshal(jsonBytes, &data)
+	val, exists := store.Get(zipcode)
+	if !exists {
+		return 0, fmt.Errorf("no weather data found for zipcode: %s", zipcode)
+	}
 
-		if data_type == "current_weather" {
-			byteValue = data.CurrentWeather
-		} else if data_type == "forecast_weather" {
-			byteValue = data.ForecastWeather
+	var data WeatherData
+	jsonBytes, _ := json.Marshal(val)
+	json.Unmarshal(jsonBytes, &data)
+
+	if len(data.CurrentWeather) == 0 {
+		return 0, fmt.Errorf("no current weather data for zipcode: %s", zipcode)
+	}
+
+	var current_data Current_weather
+	if err := json.Unmarshal(data.CurrentWeather, &current_data); err != nil {
+		return 0, fmt.Errorf("JSON unmarshal error: %v", err)
+	}
+
+	temp := int8(math.Round(current_data.Main.Temp))
+	return temp, nil
+}
+
+// ForecastDay represents a single day forecast for the protocol
+type ForecastDay struct {
+	HighTemp uint8
+	Precip   uint8
+	Moon     uint8
+}
+
+// GetForecastDays retrieves forecast data as typed values for the protocol
+func GetForecastDays(zipcode string, numDays int) ([]ForecastDay, error) {
+	if store == nil {
+		return nil, fmt.Errorf("storage not initialized")
+	}
+
+	mu.RLock()
+	defer mu.RUnlock()
+
+	val, exists := store.Get(zipcode)
+	if !exists {
+		return nil, fmt.Errorf("no weather data found for zipcode: %s", zipcode)
+	}
+
+	var data WeatherData
+	jsonBytes, _ := json.Marshal(val)
+	json.Unmarshal(jsonBytes, &data)
+
+	if len(data.ForecastWeather) == 0 {
+		return nil, fmt.Errorf("no forecast data for zipcode: %s", zipcode)
+	}
+
+	var forecast_data Forecast_weather
+	if err := json.Unmarshal(data.ForecastWeather, &forecast_data); err != nil {
+		return nil, fmt.Errorf("JSON unmarshal error: %v", err)
+	}
+
+	if len(forecast_data.Data) < numDays {
+		numDays = len(forecast_data.Data)
+	}
+
+	days := make([]ForecastDay, numDays)
+	for i := 0; i < numDays; i++ {
+		forecastDay := forecast_data.Data[i]
+
+		// HighTemp: convert to uint8, taking absolute value
+		highTemp := uint8(math.Round(math.Abs(forecastDay.HighTemp)))
+
+		// Precip: already int, just convert to uint8
+		precip := uint8(forecastDay.Pop)
+
+		// Moon: convert phase to 0/1/2 (0=<93%, 1=93-99%, 2=100%)
+		var moon uint8
+		if forecastDay.MoonPhase == 1.0 {
+			moon = 2
+		} else if forecastDay.MoonPhase > 0.93 {
+			moon = 1
 		} else {
-			fmt.Println("Read_weather: unknown data type:", data_type)
-			return ""
-		}
-	} else {
-		fmt.Println("Read_weather: no weather data found for zipcode:", zipcode)
-		return ""
-	}
-
-	if len(byteValue) == 0 {
-		fmt.Println("Read_weather: no", data_type, "data for zipcode:", zipcode)
-		return ""
-	}
-
-	// Assemble string differently for current vs forecast
-	var msg_str string
-
-	if data_type == "current_weather" {
-		// Assign json data to structure variable
-		var current_data Current_weather
-		if err := json.Unmarshal(byteValue, &current_data); err != nil {
-			fmt.Println("Read_weather: JSON unmarshal error:", err)
-			return ""
-		}
-		temp := math.Abs(current_data.Main.Temp)
-
-		// Convert float temp from struct to string
-		msg_str = "0" + fmt.Sprintf("%.0f", temp)
-
-	} else if data_type == "forecast_weather" {
-		// Assign json data to structure variable
-		var forecast_data Forecast_weather
-		if err := json.Unmarshal(byteValue, &forecast_data); err != nil {
-			fmt.Println("Read_weather: JSON unmarshal error:", err)
-			return ""
+			moon = 0
 		}
 
-		// Convert float values from struct to series of int string
-		// Param: data from struct, number of days to report
-		msg_str = "1" + assemble_forecast_msg(forecast_data, 3)
+		days[i] = ForecastDay{
+			HighTemp: highTemp,
+			Precip:   precip,
+			Moon:     moon,
+		}
 	}
 
-	return (msg_str)
-}
-
-// PRIVATE METHODS
-
-func assemble_forecast_msg(data Forecast_weather, num_days int) string {
-	var forecast_str string
-	forecast_str = fmt.Sprintf("%d", num_days)
-
-	// Call assemble_str for each day requesting forecast weather
-	for day := 0; day < num_days; day++ {
-		forecast_str += assemble_str(data, day)
-	}
-
-	return forecast_str
-}
-
-// get series of weather values, convert to str, concat
-func assemble_str(data Forecast_weather, offset_from_today int) string {
-	forecast_data := data.Data[offset_from_today]
-
-	// HighTemp float: translate to 2 digit string
-	var high_temp_str string
-	high_temp := math.Abs(forecast_data.HighTemp)
-	if high_temp < 10.0 {
-		high_temp_str = fmt.Sprintf("0%.0f", high_temp)
-	} else {
-		high_temp_str = fmt.Sprintf("%.0f", high_temp)
-	}
-
-	// Snow, Precip int: find max of the two, translate to 2 digit string
-	var precip_str string
-	precip := forecast_data.Pop
-	if precip < 10 {
-		precip_str = fmt.Sprintf("0%d", precip)
-	} else {
-		precip_str = fmt.Sprintf("%d", precip)
-	}
-
-	// MoonPhase float: translate to string corresp 100%, 93-99%, below 93%
-	var moon_str string
-	moon := forecast_data.MoonPhase
-	if moon == 1.0 {
-		moon_str = "2"
-	} else if moon > 0.93 {
-		moon_str = "1"
-	} else {
-		moon_str = "0"
-	}
-
-	return (high_temp_str + precip_str + moon_str)
+	return days, nil
 }
 
 // GetStoredWeatherData retrieves the full weather data struct for a zipcode from storage

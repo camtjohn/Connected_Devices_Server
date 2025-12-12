@@ -10,12 +10,9 @@ debug: go build -tags debug -o server_app_debug.exe
 
 2 do:
 - mqtt protocol define, create documentation. implement on both device and server
-- only get weather at a specific interval (as it is, when "update_weather" in main, it will get and send mqtt message. want to just send mqtt with already valid data)
 
-- @bootup: server interpret device bootup msg: t=dev_bootup, m=dev_name, zip
-	read/create device file based on dev_name and check that zip matches
-- interpret last will testament msg: t=dev_name, m=offline OR? t=dev_offline, m=dev_name
-- periodic heartbeat from/to device? (extra precaution in case LWT or dev_bootup messages insufficient)
+- handle periodic heartbeat from/to device? (extra precaution in case LWT or dev_bootup messages insufficient)
+	devices check in every X min. server marks heartbeat list of devices active. timer every X min, check if any active devices marked inactive in heartbeat list.
 
 - test:
 	devices file
@@ -30,5 +27,4 @@ debug: go build -tags debug -o server_app_debug.exe
 
 
 Commit summary:
-Setup Debug Build: Use debug mqtt topics.
 

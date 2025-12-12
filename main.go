@@ -6,7 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"server_app/internal/devices"
-	"server_app/internal/mqtt_local"
+	"server_app/internal/messaging"
 	"server_app/internal/weather"
 	"strings"
 	"syscall"
@@ -15,8 +15,7 @@ import (
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 )
 
-var zipcodes = []string{"78757", "60607"}
-var VERSION_NUM_STRING = "001"
+var VERSION_NUM_STRING = 1
 
 // Monitor current time set by ntpd at bootup. Only continue when time is updated
 func wait_for_current_time() {
@@ -76,7 +75,7 @@ func is_weather_valid(data_type string, zip string) bool {
 	return time.Since(lastUpdated) <= validityPeriod
 }
 
-// Publish weather via MQTT if valid
+// Publish weather via MQTT
 func publish_weather(data_type string, zip string) {
 	if !is_weather_valid(data_type, zip) {
 		fmt.Printf("Skipping publish: %s for %s not valid (too old)\n", data_type, zip)
@@ -84,10 +83,30 @@ func publish_weather(data_type string, zip string) {
 	}
 
 	msg_topic := (TopicWeatherPrefix + zip)
-	msg_payload := weather.Read_weather(data_type, zip)
 
-	if msg_payload != "" {
-		mqtt_local.Publish(msg_topic, msg_payload)
+	if data_type == "current_weather" {
+		temp, err := weather.GetCurrentWeatherTemp(zip)
+		if err != nil {
+			fmt.Printf("Error getting current weather: %v\n", err)
+			return
+		}
+		messaging.Publish(msg_topic, messaging.EncodeCurrentWeather(temp))
+	} else if data_type == "forecast_weather" {
+		days, err := weather.GetForecastDays(zip, 3)
+		if err != nil {
+			fmt.Printf("Error getting forecast: %v\n", err)
+			return
+		}
+		// Convert weather.ForecastDay to messaging.ForecastDay
+		msgDays := make([]messaging.ForecastDay, len(days))
+		for i, day := range days {
+			msgDays[i] = messaging.ForecastDay{
+				HighTemp: day.HighTemp,
+				Precip:   day.Precip,
+				Moon:     day.Moon,
+			}
+		}
+		messaging.Publish(msg_topic, messaging.EncodeForecast(msgDays))
 	}
 }
 
@@ -130,8 +149,8 @@ func handle_device_bootup(payload string) {
 	publish_weather("current_weather", zipcode)
 	publish_weather("forecast_weather", zipcode)
 
-	// Send version info for OTA check
-	mqtt_local.Publish(deviceName, VERSION_NUM_STRING)
+	// Send version info for OTA check using binary protocol
+	messaging.Publish(deviceName, messaging.EncodeVersion(uint8(VERSION_NUM_STRING)))
 }
 
 // Handler responds to mqtt messages for following topics
@@ -145,18 +164,18 @@ var msg_handler MQTT.MessageHandler = func(client MQTT.Client, msg MQTT.Message)
 
 	// Device heartbeat - keep device marked as active
 	if topic == TopicHeartbeat {
-		deviceID := payload
-		if deviceID != "" {
-			devices.Heartbeat(deviceID)
-			fmt.Printf("Heartbeat received from %s\n", deviceID)
+		deviceName := payload
+		if deviceName != "" {
+			devices.Heartbeat(deviceName)
+			fmt.Printf("Heartbeat received from %s\n", deviceName)
 		}
 	}
 
 	// Device Last Will Testament - triggered on ungraceful disconnect (network/power loss)
 	if topic == TopicOffline {
-		deviceID := payload
-		if deviceID != "" {
-			devices.SetInactive(deviceID)
+		deviceName := payload
+		if deviceName != "" {
+			devices.SetInactive(deviceName)
 		}
 	}
 }
@@ -173,7 +192,6 @@ func task_weather() {
 		case <-ticker.C:
 			// Fetch current weather for all active device zipcodes
 			activeZipcodes := devices.GetActiveZipcodes()
-
 			if len(activeZipcodes) == 0 {
 				fmt.Println("No active devices, skipping weather fetch")
 			} else {
@@ -234,12 +252,12 @@ func pingHealthcheck(client *http.Client, url string) error {
 }
 
 func start_mqtt_process() {
-	mqtt_local.Create_client(msg_handler, []string{TopicBootup, TopicTest})
+	messaging.Create_client(msg_handler, []string{TopicBootup, TopicTest})
 
 	// Subscribe to device offline topic (Last Will Testament from devices)
-	mqtt_local.Subscribe(TopicOffline, msg_handler)
+	messaging.Subscribe(TopicOffline, msg_handler)
 	// Subscribe to heartbeat topic for device keepalives
-	mqtt_local.Subscribe(TopicHeartbeat, msg_handler)
+	messaging.Subscribe(TopicHeartbeat, msg_handler)
 }
 
 func main() {
