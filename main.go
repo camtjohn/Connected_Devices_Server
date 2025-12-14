@@ -112,8 +112,20 @@ func publish_weather(data_type string, zip string) {
 
 // Handle device bootup: register device, fetch/publish weather, send version
 func handle_device_bootup(payload []byte) {
+	// Extract message payload from binary protocol
+	msgType, msgPayload, err := messaging.DecodeMessage(payload)
+	if err != nil {
+		fmt.Printf("Error decoding message: %v\n", err)
+		return
+	}
+
+	if msgType != messaging.MSG_DEVICE_CONFIG {
+		fmt.Printf("Error: expected MSG_DEVICE_CONFIG (0x03), got 0x%02X\n", msgType)
+		return
+	}
+
 	// Parse binary device config format using DecodeDeviceConfig
-	strs, err := messaging.DecodeDeviceConfig(payload)
+	strs, err := messaging.DecodeDeviceConfig(msgPayload)
 	if err != nil {
 		fmt.Printf("Error decoding device config: %v\n", err)
 		return
