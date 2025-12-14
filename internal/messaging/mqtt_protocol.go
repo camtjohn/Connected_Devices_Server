@@ -9,6 +9,7 @@ const (
 	MSG_GENERIC          = 0x00
 	MSG_CURRENT_WEATHER  = 0x01
 	MSG_FORECAST_WEATHER = 0x02
+	MSG_DEVICE_CONFIG    = 0x03
 	MSG_VERSION          = 0x10
 )
 
@@ -59,6 +60,69 @@ func EncodeVersion(version uint8) []byte {
 	msg[1] = 1 // payload length
 	msg[2] = version
 	return msg
+}
+
+// EncodeDeviceConfig creates a config message with variable number of strings
+// Format: [type][length][len1][str1][len2][str2]...[lenN][strN]
+func EncodeDeviceConfig(strings ...string) ([]byte, error) {
+	// Validate string lengths fit in a single byte
+	for i, s := range strings {
+		if len(s) > 255 {
+			return nil, fmt.Errorf("string %d length %d exceeds maximum of 255", i, len(s))
+		}
+	}
+
+	// Calculate payload: 1 byte per length field + all string content
+	payloadLen := len(strings) // one byte per length field
+	for _, s := range strings {
+		payloadLen += len(s)
+	}
+
+	if payloadLen > MAX_PAYLOAD_SIZE {
+		return nil, fmt.Errorf("payload too large: %d bytes exceeds maximum of %d", payloadLen, MAX_PAYLOAD_SIZE)
+	}
+
+	msg := make([]byte, 2+payloadLen)
+	msg[0] = MSG_DEVICE_CONFIG
+	msg[1] = uint8(payloadLen)
+
+	offset := 2
+	for _, s := range strings {
+		msg[offset] = uint8(len(s))
+		offset++
+		copy(msg[offset:offset+len(s)], s)
+		offset += len(s)
+	}
+
+	return msg, nil
+}
+
+// DecodeDeviceConfig parses a device config message and returns all strings
+func DecodeDeviceConfig(payload []byte) ([]string, error) {
+	var result []string
+	offset := 0
+
+	for offset < len(payload) {
+		if offset >= len(payload) {
+			return nil, fmt.Errorf("payload truncated: cannot read length field at offset %d", offset)
+		}
+
+		stringLen := int(payload[offset])
+		offset++
+
+		if offset+stringLen > len(payload) {
+			return nil, fmt.Errorf("payload truncated: string at offset %d claims %d bytes but only %d available", offset-1, stringLen, len(payload)-offset)
+		}
+
+		result = append(result, string(payload[offset:offset+stringLen]))
+		offset += stringLen
+	}
+
+	if len(result) == 0 {
+		return nil, fmt.Errorf("payload empty: no strings found")
+	}
+
+	return result, nil
 }
 
 // EncodeGeneric creates a generic message for topic-specific data

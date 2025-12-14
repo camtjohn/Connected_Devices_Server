@@ -1,5 +1,10 @@
 Notes:
 
+
+ssh into oracle vm:
+ssh ubuntu@170.9.225.9
+scp -i id_ed25519 ubuntu@170.9.225.9
+
 build go server
 production: go build -o server_app.exe
 debug: go build -tags debug -o server_app_debug.exe

@@ -21,6 +21,7 @@ All MQTT messages use a binary protocol with a 2-byte header followed by a varia
 | 0    | 0x00 | Generic              | Topic-dependent |
 | 1    | 0x01 | Current Weather      | Temperature data |
 | 2    | 0x02 | Forecast Weather     | Multi-day forecast |
+| 3    | 0x03 | Device Config        | Two strings with length prefixes |
 | 16   | 0x10 | Version              | Version number |
 
 ## Message Format Details
@@ -96,6 +97,35 @@ Day 3: 72°F, 10% precip, <93% moon
 0x10 0x01 0x01
 └─┬─┘ └─┬─┘ └─┬─┘
 Type  Len   Version 1
+```
+
+### 0x03 - Device Config
+
+**Total Size**: 2 + (number of strings × 1 length byte) + (sum of string lengths) bytes
+
+```
+[0x03][length][len1][str1][len2][str2]...[lenN][strN]
+```
+
+- **Type**: `0x03`
+- **Length**: Variable (uint8)
+- **Payload**: Variable number of length-prefixed strings
+  - For each string:
+    - `lenN` (uint8): Length of string N
+    - `strN` (string): String data (variable length, 0-255 bytes)
+
+**Example** (2 strings: "ESP32_Device", "12345"):
+```
+0x03 0x1A 0x0C E S P 3 2 _ D e v i c e 0x05 1 2 3 4 5
+└─┬─┘ └─┬─┘ └─┬─┘└──────────┬──────────┘ └─┬─┘└────┬────┘
+Type  Len=26 Len1=12     "ESP32_Device"   Len2=5  "12345"
+```
+
+**Example** (3 strings: "living room", "60601", "WiFi"):
+```
+0x03 0x1F 0x0B l i v i n g   r o o m 0x05 6 0 6 0 1 0x04 W i F i
+└─┬─┘ └─┬─┘ └─┬─┘└───────────┬───────┘ └─┬─┘└─────┬────┘ └┬┘└──┬─┘
+Type  Len=31 L1=11  "living room"       L2=5  "60601"  L3=4 "WiFi"
 ```
 
 ## Decoding Messages

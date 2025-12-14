@@ -111,19 +111,24 @@ func publish_weather(data_type string, zip string) {
 }
 
 // Handle device bootup: register device, fetch/publish weather, send version
-func handle_device_bootup(payload string) {
-	// Parse payload format: "device_name,zipcode"
-	parts := strings.Split(payload, ",")
-	if len(parts) < 2 {
-		fmt.Println("Error: dev_bootup format should be 'device_name,zipcode'")
+func handle_device_bootup(payload []byte) {
+	// Parse binary device config format using DecodeDeviceConfig
+	strs, err := messaging.DecodeDeviceConfig(payload)
+	if err != nil {
+		fmt.Printf("Error decoding device config: %v\n", err)
 		return
 	}
 
-	deviceName := strings.TrimSpace(parts[0])
-	zipcode := strings.TrimSpace(parts[1])
+	if len(strs) < 2 {
+		fmt.Printf("Error: device config requires at least 2 strings, got %d\n", len(strs))
+		return
+	}
+
+	deviceName := strings.TrimSpace(strs[0])
+	zipcode := strings.TrimSpace(strs[1])
 
 	if deviceName == "" || zipcode == "" {
-		fmt.Println("Error: dev_bootup has empty device name or zipcode")
+		fmt.Println("Error: device config has empty device name or zipcode")
 		return
 	}
 
@@ -156,7 +161,7 @@ func handle_device_bootup(payload string) {
 // Handler responds to mqtt messages for following topics
 var msg_handler MQTT.MessageHandler = func(client MQTT.Client, msg MQTT.Message) {
 	topic := string(msg.Topic())
-	payload := string(msg.Payload())
+	payload := msg.Payload()
 
 	if topic == TopicBootup {
 		handle_device_bootup(payload)
@@ -164,7 +169,7 @@ var msg_handler MQTT.MessageHandler = func(client MQTT.Client, msg MQTT.Message)
 
 	// Device heartbeat - keep device marked as active
 	if topic == TopicHeartbeat {
-		deviceName := payload
+		deviceName := string(payload)
 		if deviceName != "" {
 			devices.Heartbeat(deviceName)
 			fmt.Printf("Heartbeat received from %s\n", deviceName)
@@ -173,7 +178,7 @@ var msg_handler MQTT.MessageHandler = func(client MQTT.Client, msg MQTT.Message)
 
 	// Device Last Will Testament - triggered on ungraceful disconnect (network/power loss)
 	if topic == TopicOffline {
-		deviceName := payload
+		deviceName := string(payload)
 		if deviceName != "" {
 			devices.SetInactive(deviceName)
 		}
