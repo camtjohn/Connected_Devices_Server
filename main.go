@@ -58,9 +58,15 @@ func is_weather_valid(data_type string, zip string) bool {
 	var err error
 
 	if data_type == "current_weather" {
+		if val.CurrentWeatherUpdated == "" {
+			return false // No valid timestamp, treat as invalid
+		}
 		lastUpdated, err = time.Parse(time.RFC3339, val.CurrentWeatherUpdated)
 		validityPeriod = time.Duration(WeatherValidityPeriod) * time.Minute
 	} else if data_type == "forecast_weather" {
+		if val.ForecastWeatherUpdated == "" {
+			return false // No valid timestamp, treat as invalid
+		}
 		lastUpdated, err = time.Parse(time.RFC3339, val.ForecastWeatherUpdated)
 		validityPeriod = time.Duration(ForecastValidityPeriod) * time.Minute
 	} else {
@@ -284,13 +290,23 @@ func main() {
 		fmt.Println("Starting up... [PRODUCTION BUILD]")
 	}
 
-	// Initialize persistent device storage (single file)
-	if err := devices.InitStorage("./data/devices.json"); err != nil {
+	// Initialize persistent device storage (separate files for debug/prod)
+	var deviceStoragePath string
+	var weatherStoragePath string
+	if IsDebugBuild {
+		deviceStoragePath = "./data/devices_debug.json"
+		weatherStoragePath = "./data/weather_debug.json"
+	} else {
+		deviceStoragePath = "./data/devices.json"
+		weatherStoragePath = "./data/weather.json"
+	}
+
+	if err := devices.InitStorage(deviceStoragePath); err != nil {
 		fmt.Printf("Warning: failed to initialize device storage: %v\n", err)
 	}
 
 	// Initialize weather storage
-	if err := weather.InitWeatherStorage("./data/weather.json"); err != nil {
+	if err := weather.InitWeatherStorage(weatherStoragePath); err != nil {
 		fmt.Printf("Warning: failed to initialize weather storage: %v\n", err)
 	}
 
