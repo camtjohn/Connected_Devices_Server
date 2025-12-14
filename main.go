@@ -257,7 +257,7 @@ func pingHealthcheck(client *http.Client, url string) error {
 }
 
 func start_mqtt_process() {
-	messaging.Create_client(msg_handler, []string{TopicBootup, TopicTest})
+	messaging.Create_client(msg_handler, []string{TopicBootup, TopicTest}, IsDebugBuild)
 
 	// Subscribe to device offline topic (Last Will Testament from devices)
 	messaging.Subscribe(TopicOffline, msg_handler)

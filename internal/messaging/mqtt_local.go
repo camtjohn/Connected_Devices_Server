@@ -13,13 +13,20 @@ import (
 
 var client MQTT.Client
 
-func Create_client(handler MQTT.MessageHandler, initialTopics []string) {
+func Create_client(handler MQTT.MessageHandler, initialTopics []string, isDebug bool) {
 	fmt.Println("Starting create client")
 
 	broker := "ssl://localhost:8883"
 	// include host in clientID to avoid collisions that cause broker to drop connections
 	hostname, _ := os.Hostname()
-	clientID := "go-server-" + hostname
+
+	// Build clientID based on debug build flag
+	var clientID string
+	if isDebug {
+		clientID = "go-server-debug-" + hostname
+	} else {
+		clientID = "go-server-" + hostname
+	}
 
 	caPath := "./certs/ca.crt"
 	certPath := "./certs/client_server.crt"

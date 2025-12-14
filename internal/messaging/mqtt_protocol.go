@@ -63,8 +63,13 @@ func EncodeVersion(version uint8) []byte {
 }
 
 // EncodeDeviceConfig creates a config message with variable number of strings
-// Format: [type][length][len1][str1][len2][str2]...[lenN][strN]
+// Format: [type][length][numStrings][len1][str1][len2][str2]...[lenN][strN]
 func EncodeDeviceConfig(strings ...string) ([]byte, error) {
+	// Validate string count
+	if len(strings) > 255 {
+		return nil, fmt.Errorf("too many strings: %d exceeds maximum of 255", len(strings))
+	}
+
 	// Validate string lengths fit in a single byte
 	for i, s := range strings {
 		if len(s) > 255 {
@@ -72,8 +77,8 @@ func EncodeDeviceConfig(strings ...string) ([]byte, error) {
 		}
 	}
 
-	// Calculate payload: 1 byte per length field + all string content
-	payloadLen := len(strings) // one byte per length field
+	// Calculate payload: 1 byte for count + 1 byte per length field + all string content
+	payloadLen := 1 + len(strings) // 1 for count, 1 per length field
 	for _, s := range strings {
 		payloadLen += len(s)
 	}
@@ -85,8 +90,9 @@ func EncodeDeviceConfig(strings ...string) ([]byte, error) {
 	msg := make([]byte, 2+payloadLen)
 	msg[0] = MSG_DEVICE_CONFIG
 	msg[1] = uint8(payloadLen)
+	msg[2] = uint8(len(strings)) // First payload byte is string count
 
-	offset := 2
+	offset := 3
 	for _, s := range strings {
 		msg[offset] = uint8(len(s))
 		offset++
@@ -99,27 +105,28 @@ func EncodeDeviceConfig(strings ...string) ([]byte, error) {
 
 // DecodeDeviceConfig parses a device config message and returns all strings
 func DecodeDeviceConfig(payload []byte) ([]string, error) {
-	var result []string
-	offset := 0
+	if len(payload) < 1 {
+		return nil, fmt.Errorf("payload too short: need at least 1 byte for string count")
+	}
 
-	for offset < len(payload) {
+	numStrings := int(payload[0])
+	var result []string
+	offset := 1
+
+	for i := 0; i < numStrings; i++ {
 		if offset >= len(payload) {
-			return nil, fmt.Errorf("payload truncated: cannot read length field at offset %d", offset)
+			return nil, fmt.Errorf("payload truncated: cannot read length field for string %d at offset %d", i+1, offset)
 		}
 
 		stringLen := int(payload[offset])
 		offset++
 
 		if offset+stringLen > len(payload) {
-			return nil, fmt.Errorf("payload truncated: string at offset %d claims %d bytes but only %d available", offset-1, stringLen, len(payload)-offset)
+			return nil, fmt.Errorf("payload truncated: string %d at offset %d claims %d bytes but only %d available", i+1, offset-1, stringLen, len(payload)-offset)
 		}
 
 		result = append(result, string(payload[offset:offset+stringLen]))
 		offset += stringLen
-	}
-
-	if len(result) == 0 {
-		return nil, fmt.Errorf("payload empty: no strings found")
 	}
 
 	return result, nil

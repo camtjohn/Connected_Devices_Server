@@ -101,31 +101,32 @@ Type  Len   Version 1
 
 ### 0x03 - Device Config
 
-**Total Size**: 2 + (number of strings × 1 length byte) + (sum of string lengths) bytes
+**Total Size**: 2 + 1 + (number of strings × 1 length byte) + (sum of string lengths) bytes
 
 ```
-[0x03][length][len1][str1][len2][str2]...[lenN][strN]
+[0x03][length][numStrings][len1][str1][len2][str2]...[lenN][strN]
 ```
 
 - **Type**: `0x03`
 - **Length**: Variable (uint8)
-- **Payload**: Variable number of length-prefixed strings
+- **Payload**: 
+  - `numStrings` (uint8): Number of strings in the message
   - For each string:
     - `lenN` (uint8): Length of string N
     - `strN` (string): String data (variable length, 0-255 bytes)
 
 **Example** (2 strings: "ESP32_Device", "12345"):
 ```
-0x03 0x1A 0x0C E S P 3 2 _ D e v i c e 0x05 1 2 3 4 5
-└─┬─┘ └─┬─┘ └─┬─┘└──────────┬──────────┘ └─┬─┘└────┬────┘
-Type  Len=26 Len1=12     "ESP32_Device"   Len2=5  "12345"
+0x03 0x1B 0x02 0x0C E S P 3 2 _ D e v i c e 0x05 1 2 3 4 5
+└─┬─┘ └─┬─┘ └─┬─┘ └─┬─┘└──────────┬──────────┘ └─┬─┘└────┬────┘
+Type  Len=27 Count=2 L1=12    "ESP32_Device"   L2=5  "12345"
 ```
 
 **Example** (3 strings: "living room", "60601", "WiFi"):
 ```
-0x03 0x1F 0x0B l i v i n g   r o o m 0x05 6 0 6 0 1 0x04 W i F i
-└─┬─┘ └─┬─┘ └─┬─┘└───────────┬───────┘ └─┬─┘└─────┬────┘ └┬┘└──┬─┘
-Type  Len=31 L1=11  "living room"       L2=5  "60601"  L3=4 "WiFi"
+0x03 0x20 0x03 0x0B l i v i n g   r o o m 0x05 6 0 6 0 1 0x04 W i F i
+└─┬─┘ └─┬─┘ └─┬─┘ └─┬─┘└───────────┬───────┘ └─┬─┘└─────┬────┘ └┬┘└──┬─┘
+Type  Len=32 Count=3 L1=11  "living room"       L2=5  "60601"  L3=4 "WiFi"
 ```
 
 ## Decoding Messages
