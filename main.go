@@ -15,7 +15,7 @@ import (
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 )
 
-var VERSION_NUM_STRING = 1
+var VERSION_NUM = 1
 
 // Monitor current time set by ntpd at bootup. Only continue when time is updated
 func wait_for_current_time() {
@@ -173,7 +173,11 @@ func handle_device_bootup(payload []byte) {
 	publish_weather("forecast_weather", zipcode)
 
 	// Send version info for OTA check using binary protocol
-	messaging.Publish(deviceName, messaging.EncodeVersion(uint8(VERSION_NUM_STRING)))
+	topicName := deviceName
+	if IsDebugBuild {
+		topicName = "debug_" + deviceName
+	}
+	messaging.Publish(topicName, messaging.EncodeVersion(uint8(VERSION_NUM)))
 }
 
 // Handler responds to mqtt messages for following topics
