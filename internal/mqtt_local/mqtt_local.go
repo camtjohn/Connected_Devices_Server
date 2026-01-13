@@ -4,16 +4,17 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
+	"server_app/internal/messaging"
 	"time"
+
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 )
 
 var client MQTT.Client
 
-func Create_client(handler MQTT.MessageHandler) {
+func Create_client(handler MQTT.MessageHandler, initialTopics []string) {
 	fmt.Println("Starting create client")
 
 	broker := "ssl://localhost:8883"
@@ -21,12 +22,12 @@ func Create_client(handler MQTT.MessageHandler) {
 	hostname, _ := os.Hostname()
 	clientID := "go-server-" + hostname
 
-	caPath := "/home/ubuntu/server_app/certs/ca.crt"
-	certPath := "/home/ubuntu/server_app/certs/client_server.crt"
-	keyPath := "/home/ubuntu/server_app/certs/client_server.key"
+	caPath := "./certs/ca.crt"
+	certPath := "./certs/client_server.crt"
+	keyPath := "./certs/client_server.key"
 
 	// Load CA cert
-	caCert, err := ioutil.ReadFile(caPath)
+	caCert, err := os.ReadFile(caPath)
 	if err != nil {
 		log.Fatalf("Failed to read CA cert: %v", err)
 	}
@@ -42,10 +43,10 @@ func Create_client(handler MQTT.MessageHandler) {
 	}
 
 	tlsConfig := &tls.Config{
-		RootCAs:            caPool,
-		Certificates:       []tls.Certificate{cert},
+		RootCAs:      caPool,
+		Certificates: []tls.Certificate{cert},
 		//InsecureSkipVerify: false, // enforce CN/SAN match
-		MinVersion:         tls.VersionTLS12,
+		MinVersion: tls.VersionTLS12,
 	}
 
 	// set protocol, ip, and port of broker
@@ -68,8 +69,7 @@ func Create_client(handler MQTT.MessageHandler) {
 	opts.OnConnect = func(c MQTT.Client) {
 		fmt.Println("Connected to MQTT broker, subscribing to topics...")
 
-		topics := []string{"test1", "dev_bootup"}
-		for _, topic := range topics {
+		for _, topic := range initialTopics {
 			if token := c.Subscribe(topic, 1, handler); token.Wait() && token.Error() != nil {
 				log.Printf("Failed to subscribe to %s: %v", topic, token.Error())
 			} else {
@@ -87,17 +87,27 @@ func Create_client(handler MQTT.MessageHandler) {
 	}
 }
 
-func Publish(topic string, msg string) {
-	fmt.Printf("Publishing to topic from mqtt: %s\n", topic)
+func Publish(topic string, data []byte) {
+	fmt.Printf("Publishing to %s\n", topic)
 	if client == nil || !client.IsConnected() {
 		log.Printf("MQTT client not connected; skipping publish to %s", topic)
 		return
 	}
-	token := client.Publish(topic, 1, false, msg)
+	token := client.Publish(topic, 1, false, data)
 	token.Wait()
 	if token.Error() != nil {
 		log.Printf("Publish error: %v", token.Error())
 	}
+}
+
+// DecodeAndLogMessage decodes binary protocol messages
+func DecodeAndLogMessage(data []byte) {
+	msgType, payload, err := messaging.DecodeMessage(data)
+	if err != nil {
+		log.Printf("Error decoding message: %v", err)
+		return
+	}
+	fmt.Printf("Decoded message - Type: 0x%02X, Payload length: %d\n", msgType, len(payload))
 }
 
 func Subscribe(topic string, handler MQTT.MessageHandler) {

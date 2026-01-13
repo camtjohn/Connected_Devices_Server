@@ -5,12 +5,17 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"server_app/internal/devices"
+	"server_app/internal/messaging"
+	"server_app/internal/weather"
+	"strings"
 	"syscall"
 	"time"
-	"server_app/internal/mqtt_local"
-	"server_app/internal/weather"
+
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 )
+
+var VERSION_NUM = 1
 
 // Monitor current time set by ntpd at bootup. Only continue when time is updated
 func wait_for_current_time() {
@@ -31,61 +36,212 @@ func wait_for_current_time() {
 	}
 }
 
-// Read/publish weather
-func update_weather(data_type string, zip string) {
-	msg_topic := ("weather" + zip)
-	// check freshness of json file. get/store new data if old.
-	// for now, get forecast at bootup (already got current)
-	if data_type == "forecast_weather" {
-		forecast_data := weather.Get_weather("forecast_weather")
-		weather.Store_weather("forecast_weather", forecast_data)
-		time.Sleep(1 * time.Second)
+// Fetch and store weather data
+func fetch_weather(data_type string, zip string) {
+	weather_data := weather.FetchWeatherFromAPI(data_type, zip)
+	if len(weather_data) > 0 {
+		weather.Store_weather(data_type, weather_data, zip)
+		fmt.Printf("Fetched and stored %s for %s\n", data_type, zip)
 	}
-	msg_payload := weather.Read_weather(data_type)
+}
 
-	mqtt_local.Publish(msg_topic, msg_payload)
+// Check if weather data is valid (recently updated)
+func is_weather_valid(data_type string, zip string) bool {
+	val, exists := weather.GetStoredWeatherData(zip)
+	if !exists {
+		return false
+	}
+
+	// Parse last updated time and set validity period based on data type
+	var lastUpdated time.Time
+	var validityPeriod time.Duration
+	var err error
+
+	if data_type == "current_weather" {
+		if val.CurrentWeatherUpdated == "" {
+			return false // No valid timestamp, treat as invalid
+		}
+		lastUpdated, err = time.Parse(time.RFC3339, val.CurrentWeatherUpdated)
+		validityPeriod = time.Duration(WeatherValidityPeriod) * time.Minute
+	} else if data_type == "forecast_weather" {
+		if val.ForecastWeatherUpdated == "" {
+			return false // No valid timestamp, treat as invalid
+		}
+		lastUpdated, err = time.Parse(time.RFC3339, val.ForecastWeatherUpdated)
+		validityPeriod = time.Duration(ForecastValidityPeriod) * time.Minute
+	} else {
+		return false
+	}
+
+	if err != nil {
+		fmt.Printf("Warning: could not parse weather timestamp: %v\n", err)
+		return false
+	}
+
+	return time.Since(lastUpdated) <= validityPeriod
+}
+
+// Publish weather via MQTT
+func publish_weather(data_type string, zip string) {
+	if !is_weather_valid(data_type, zip) {
+		fmt.Printf("Skipping publish: %s for %s not valid (too old)\n", data_type, zip)
+		return
+	}
+
+	msg_topic := (TopicWeatherPrefix + zip)
+
+	if data_type == "current_weather" {
+		temp, err := weather.GetCurrentWeatherTemp(zip)
+		if err != nil {
+			fmt.Printf("Error getting current weather: %v\n", err)
+			return
+		}
+		messaging.Publish(msg_topic, messaging.EncodeCurrentWeather(temp))
+	} else if data_type == "forecast_weather" {
+		days, err := weather.GetForecastDays(zip, 3)
+		if err != nil {
+			fmt.Printf("Error getting forecast: %v\n", err)
+			return
+		}
+		// Convert weather.ForecastDay to messaging.ForecastDay
+		msgDays := make([]messaging.ForecastDay, len(days))
+		for i, day := range days {
+			msgDays[i] = messaging.ForecastDay{
+				HighTemp: day.HighTemp,
+				Precip:   day.Precip,
+				Moon:     day.Moon,
+			}
+		}
+		messaging.Publish(msg_topic, messaging.EncodeForecast(msgDays))
+	}
+}
+
+// Handle device bootup: register device, fetch/publish weather, send version
+func handle_device_bootup(payload []byte) {
+	// Extract message payload from binary protocol
+	msgType, msgPayload, err := messaging.DecodeMessage(payload)
+	if err != nil {
+		fmt.Printf("Error decoding message: %v\n", err)
+		return
+	}
+
+	if msgType != messaging.MSG_DEVICE_CONFIG {
+		fmt.Printf("Error: expected MSG_DEVICE_CONFIG (0x03), got 0x%02X\n", msgType)
+		return
+	}
+
+	// Parse binary device config format using DecodeDeviceConfig
+	strs, err := messaging.DecodeDeviceConfig(msgPayload)
+	if err != nil {
+		fmt.Printf("Error decoding device config: %v\n", err)
+		return
+	}
+
+	if len(strs) < 2 {
+		fmt.Printf("Error: device config requires at least 2 strings, got %d\n", len(strs))
+		return
+	}
+
+	deviceName := strings.TrimSpace(strs[0])
+	zipcode := strings.TrimSpace(strs[1])
+
+	if deviceName == "" || zipcode == "" {
+		fmt.Println("Error: device config has empty device name or zipcode")
+		return
+	}
+
+	// Register device as active
+	devices.RegisterDevice(deviceName, zipcode)
+
+	// Fetch weather only if not already valid
+	if !is_weather_valid("current_weather", zipcode) {
+		fetch_weather("current_weather", zipcode)
+	} else {
+		fmt.Printf("Current weather for %s is already valid, skipping fetch\n", zipcode)
+	}
+
+	if !is_weather_valid("forecast_weather", zipcode) {
+		fetch_weather("forecast_weather", zipcode)
+	} else {
+		fmt.Printf("Forecast for %s is already valid, skipping fetch\n", zipcode)
+	}
+
+	time.Sleep(1 * time.Second)
+
+	// Publish weather to device
+	publish_weather("current_weather", zipcode)
+	publish_weather("forecast_weather", zipcode)
+
+	// Send version info for OTA check using binary protocol
+	topicName := deviceName
+	if IsDebugBuild {
+		topicName = "debug_" + deviceName
+	}
+	messaging.Publish(topicName, messaging.EncodeVersion(uint8(VERSION_NUM)))
 }
 
 // Handler responds to mqtt messages for following topics
 var msg_handler MQTT.MessageHandler = func(client MQTT.Client, msg MQTT.Message) {
 	topic := string(msg.Topic())
-	payload := string(msg.Payload())
+	payload := msg.Payload()
 
-	if topic == "test1" {
-		fmt.Println("recvd msg for test1", payload)
+	if topic == TopicBootup {
+		handle_device_bootup(payload)
 	}
 
-	if topic == "dev_bootup" {
-		version_str := "01"
-		// At some point, Will get zip from payload and update weather for that zip
-		update_weather("current_weather", "49085")
-		update_weather("forecast_weather", "49085")
-		mqtt_local.Publish(payload, version_str)
+	// Device heartbeat - keep device marked as active
+	if topic == TopicHeartbeat {
+		deviceName := string(payload)
+		if deviceName != "" {
+			devices.Heartbeat(deviceName)
+			fmt.Printf("Heartbeat received from %s\n", deviceName)
+		}
+	}
+
+	// Device Last Will Testament - triggered on ungraceful disconnect (network/power loss)
+	if topic == TopicOffline {
+		deviceName := string(payload)
+		if deviceName != "" {
+			devices.SetInactive(deviceName)
+		}
 	}
 }
 
 // Update weather every x minutes
 func task_weather() {
-	count_send_current := 0
+	ticker := time.NewTicker(time.Duration(WeatherUpdateInterval) * time.Minute)
+	forecastTicker := time.NewTicker(time.Duration(ForecastUpdateInterval) * time.Minute)
+	defer ticker.Stop()
+	defer forecastTicker.Stop()
 
 	for {
-		// Send current weather data to devices
-		weather_data := weather.Get_weather("current_weather")
-		weather.Store_weather("current_weather", weather_data)
-		time.Sleep(1 * time.Second)
-		update_weather("current_weather", "49085")
+		select {
+		case <-ticker.C:
+			// Fetch current weather for all active device zipcodes
+			activeZipcodes := devices.GetActiveZipcodes()
+			if len(activeZipcodes) == 0 {
+				fmt.Println("No active devices, skipping weather fetch")
+			} else {
+				fmt.Printf("Fetching current weather for %d zipcode(s)\n", len(activeZipcodes))
+				for _, zip := range activeZipcodes {
+					fetch_weather("current_weather", zip)
+					time.Sleep(1 * time.Second)
+				}
+			}
 
-		// Send forecast every 6 hours = 12 times publishing current weather
-		count_send_current++
-		if count_send_current > 12 {
-			forecast_data := weather.Get_weather("forecast_weather")
-			weather.Store_weather("forecast_weather", forecast_data)
-			time.Sleep(1 * time.Second)
-			update_weather("forecast_weather", "49085")
-			count_send_current = 0
+		case <-forecastTicker.C:
+			// Fetch forecast for all active device zipcodes
+			activeZipcodes := devices.GetActiveZipcodes()
+			if len(activeZipcodes) == 0 {
+				fmt.Println("No active devices, skipping forecast fetch")
+			} else {
+				fmt.Printf("Fetching forecast for %d zipcode(s)\n", len(activeZipcodes))
+				for _, zip := range activeZipcodes {
+					fetch_weather("forecast_weather", zip)
+					time.Sleep(1 * time.Second)
+				}
+			}
 		}
-
-		time.Sleep(30 * time.Minute)
 	}
 }
 
@@ -122,11 +278,43 @@ func pingHealthcheck(client *http.Client, url string) error {
 	return nil
 }
 
-func main() {
-	fmt.Println("Starter up...")
-	wait_for_current_time()
+func start_mqtt_process() {
+	messaging.Create_client(msg_handler, []string{TopicBootup, TopicTest}, IsDebugBuild)
 
-	// Channel to signal when to stop process
+	// Subscribe to device offline topic (Last Will Testament from devices)
+	messaging.Subscribe(TopicOffline, msg_handler)
+	// Subscribe to heartbeat topic for device keepalives
+	messaging.Subscribe(TopicHeartbeat, msg_handler)
+}
+
+func main() {
+	if IsDebugBuild {
+		fmt.Println("Starting up... [DEBUG BUILD]")
+	} else {
+		fmt.Println("Starting up... [PRODUCTION BUILD]")
+	}
+
+	// Initialize persistent device storage (separate files for debug/prod)
+	var deviceStoragePath string
+	var weatherStoragePath string
+	if IsDebugBuild {
+		deviceStoragePath = "./data/devices_debug.json"
+		weatherStoragePath = "./data/weather_debug.json"
+	} else {
+		deviceStoragePath = "./data/devices.json"
+		weatherStoragePath = "./data/weather.json"
+	}
+
+	if err := devices.InitStorage(deviceStoragePath); err != nil {
+		fmt.Printf("Warning: failed to initialize device storage: %v\n", err)
+	}
+
+	// Initialize weather storage
+	if err := weather.InitWeatherStorage(weatherStoragePath); err != nil {
+		fmt.Printf("Warning: failed to initialize weather storage: %v\n", err)
+	}
+
+	wait_for_current_time() // Channel to signal when to stop process
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
@@ -136,8 +324,8 @@ func main() {
 	// Get weather every x minutes
 	go task_weather()
 
-	// Start mqtt process
-	mqtt_local.Create_client(msg_handler)
+	start_mqtt_process()
+
 	fmt.Println("Finished process initializing")
 
 	<-c // Block until signal received

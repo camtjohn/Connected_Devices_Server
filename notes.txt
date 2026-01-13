@@ -1,9 +1,0 @@
-2 do:
-- map of each online device: dev_name, zip
-- list of active zips in weather module
-- get/store weather for multiple zips
-- periodic publish active zips
-
-- @bootup: device publish t=dev_bootup, m=dev_name, zip
-- last will testament: t=dev_name, m=offline
-- periodic heartbeat from/to device? (if dev doesn't get expected weather update)
