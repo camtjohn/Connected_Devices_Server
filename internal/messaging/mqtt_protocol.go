@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"encoding/binary"
 	"fmt"
 )
 
@@ -11,6 +12,10 @@ const (
 	MSG_FORECAST_WEATHER = 0x02
 	MSG_DEVICE_CONFIG    = 0x03
 	MSG_VERSION          = 0x10
+	// Etchsketch shared view messages
+	MSG_TYPE_SHARED_VIEW_REQ     = 0x20
+	MSG_TYPE_SHARED_VIEW_FRAME   = 0x21
+	MSG_TYPE_SHARED_VIEW_UPDATES = 0x22
 )
 
 // Protocol constraints for ESP32 compatibility
@@ -54,11 +59,12 @@ func EncodeForecast(days []ForecastDay) []byte {
 }
 
 // EncodeVersion creates a version message with proper header
-func EncodeVersion(version uint8) []byte {
-	msg := make([]byte, 3)
+func EncodeVersion(version uint16) []byte {
+	// Version is uint16 big-endian per protocol; payload length = 2
+	msg := make([]byte, 4)
 	msg[0] = MSG_VERSION
-	msg[1] = 1 // payload length
-	msg[2] = version
+	msg[1] = 2 // payload length
+	binary.BigEndian.PutUint16(msg[2:4], version)
 	return msg
 }
 

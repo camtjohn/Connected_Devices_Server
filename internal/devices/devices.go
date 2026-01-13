@@ -216,7 +216,7 @@ func PrintStatus() {
 		fmt.Printf("Device: %s (%s) | Status: %s | Last Seen: %v ago | Zipcode: %s\n",
 			id, device.Name, status, time.Since(device.LastSeen).Round(time.Second), device.Zipcode)
 	}
-	fmt.Println("====================\n")
+	fmt.Println("====================")
 }
 
 // Private helper functions
