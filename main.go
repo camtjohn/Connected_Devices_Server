@@ -1,21 +1,82 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"server_app/internal/devices"
+	"server_app/internal/etchsketch"
 	"server_app/internal/messaging"
 	"server_app/internal/weather"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 )
 
-var VERSION_NUM = 1
+// Runtime configuration
+type RuntimeConfig struct {
+	DeviceVersion string `json:"deviceVersion"`
+}
+
+var (
+	runtimeConfig RuntimeConfig
+	configMutex   sync.RWMutex
+)
+
+// Global etchsketch manager (initialized when MQTT client is ready)
+var etchsketchManager *etchsketch.Manager
+var etchsketchTopic string
+
+// Load runtime config from config.json
+func loadRuntimeConfig() error {
+	data, err := os.ReadFile("config.json")
+	if err != nil {
+		return fmt.Errorf("failed to read config.json: %w", err)
+	}
+
+	var config RuntimeConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("failed to parse config.json: %w", err)
+	}
+
+	configMutex.Lock()
+	runtimeConfig = config
+	configMutex.Unlock()
+
+	fmt.Printf("Loaded runtime config: deviceVersion=%s\n", config.DeviceVersion)
+	return nil
+}
+
+// Get current device version from runtime config as uint16
+func getDeviceVersion() uint16 {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+
+	version, err := strconv.ParseUint(runtimeConfig.DeviceVersion, 10, 16)
+	if err != nil {
+		fmt.Printf("Warning: invalid version format '%s', using default 1\n", runtimeConfig.DeviceVersion)
+		return 1
+	}
+	return uint16(version)
+}
+
+// Periodically reload runtime config
+func task_reload_config() {
+	ticker := time.NewTicker(15 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if err := loadRuntimeConfig(); err != nil {
+			fmt.Printf("Warning: failed to reload config: %v\n", err)
+		}
+	}
+}
 
 // Monitor current time set by ntpd at bootup. Only continue when time is updated
 func wait_for_current_time() {
@@ -88,7 +149,7 @@ func publish_weather(data_type string, zip string) {
 		return
 	}
 
-	msg_topic := (TopicWeatherPrefix + zip)
+	msg_topic := (TopicWeatherPrefix + "/" + zip)
 
 	if data_type == "current_weather" {
 		temp, err := weather.GetCurrentWeatherTemp(zip)
@@ -96,7 +157,8 @@ func publish_weather(data_type string, zip string) {
 			fmt.Printf("Error getting current weather: %v\n", err)
 			return
 		}
-		messaging.Publish(msg_topic, messaging.EncodeCurrentWeather(temp))
+		// Weather updates use QoS 0 per protocol specification
+		messaging.PublishQoS0(msg_topic, messaging.EncodeCurrentWeather(temp))
 	} else if data_type == "forecast_weather" {
 		days, err := weather.GetForecastDays(zip, 3)
 		if err != nil {
@@ -112,8 +174,60 @@ func publish_weather(data_type string, zip string) {
 				Moon:     day.Moon,
 			}
 		}
-		messaging.Publish(msg_topic, messaging.EncodeForecast(msgDays))
+		// Weather updates use QoS 0 per protocol specification
+		messaging.PublishQoS0(msg_topic, messaging.EncodeForecast(msgDays))
 	}
+}
+
+// Publish version notification to device
+// Topic: <device_name> (e.g., "dev0" or "debug_dev0")
+// Message Type: 0x10 (MSG_TYPE_VERSION)
+// QoS: 1 (at-least-once delivery for critical message)
+func publish_version_notification(deviceName string) {
+	version := getDeviceVersion()
+	msg := messaging.EncodeVersion(version)
+	topicName := deviceName
+	if IsDebugBuild {
+		topicName = "debug_" + deviceName
+	}
+	fmt.Printf("Publishing version %d to topic %s\n", version, topicName)
+	messaging.PublishQoS1(topicName, msg)
+}
+
+// Parse heartbeat message (binary format: [type][length][name_len][name_data])
+// Returns device name or error
+func parseHeartbeatMessage(payload []byte) (string, error) {
+	if len(payload) < 3 {
+		return "", fmt.Errorf("heartbeat message too short (need at least 3 bytes, got %d)", len(payload))
+	}
+
+	msgType := payload[0]
+	msgLen := payload[1]
+
+	// Check message type
+	if msgType != 0x11 {
+		return "", fmt.Errorf("invalid heartbeat message type: expected 0x11, got 0x%02X", msgType)
+	}
+
+	// Verify payload length matches header
+	if len(payload) < 2+int(msgLen) {
+		return "", fmt.Errorf("heartbeat payload length mismatch: header says %d, got %d", msgLen, len(payload)-2)
+	}
+
+	msgPayload := payload[2 : 2+msgLen]
+
+	// Parse payload: [device_name_len][device_name_data]
+	if len(msgPayload) < 1 {
+		return "", fmt.Errorf("heartbeat payload missing device name length")
+	}
+
+	nameLen := msgPayload[0]
+	if len(msgPayload) < 1+int(nameLen) {
+		return "", fmt.Errorf("heartbeat device name length mismatch: expected %d bytes, got %d", nameLen, len(msgPayload)-1)
+	}
+
+	deviceName := string(msgPayload[1 : 1+nameLen])
+	return deviceName, nil
 }
 
 // Handle device bootup: register device, fetch/publish weather, send version
@@ -145,6 +259,7 @@ func handle_device_bootup(payload []byte) {
 	deviceName := strings.TrimSpace(strs[0])
 	zipcode := strings.TrimSpace(strs[1])
 
+	fmt.Printf("Bootup parsed: device=%s, zipcode=%s\n", deviceName, zipcode)
 	if deviceName == "" || zipcode == "" {
 		fmt.Println("Error: device config has empty device name or zipcode")
 		return
@@ -172,12 +287,49 @@ func handle_device_bootup(payload []byte) {
 	publish_weather("current_weather", zipcode)
 	publish_weather("forecast_weather", zipcode)
 
-	// Send version info for OTA check using binary protocol
-	topicName := deviceName
-	if IsDebugBuild {
-		topicName = "debug_" + deviceName
+	// Publish version notification to device (QoS 1 per protocol specification)
+	publish_version_notification(deviceName)
+}
+
+// Handle etchsketch shared view messages
+func handle_etchsketch_message(payload []byte) {
+	if len(payload) < 2 {
+		fmt.Println("Error: etchsketch message too short")
+		return
 	}
-	messaging.Publish(topicName, messaging.EncodeVersion(uint8(VERSION_NUM)))
+
+	msgType := payload[0]
+	msgLen := payload[1]
+
+	if len(payload) < 2+int(msgLen) {
+		fmt.Printf("Error: etchsketch message length mismatch (expected %d, got %d)\n", msgLen, len(payload)-2)
+		return
+	}
+
+	msgPayload := payload[2 : 2+msgLen]
+
+	switch msgType {
+	case messaging.MSG_TYPE_SHARED_VIEW_REQ:
+		// Device requesting full canvas state
+		fmt.Println("Received etchsketch sync request")
+		if err := etchsketchManager.HandleSyncRequest("device"); err != nil {
+			fmt.Printf("Error handling sync request: %v\n", err)
+		}
+
+	case messaging.MSG_TYPE_SHARED_VIEW_UPDATES:
+		// Device sending pixel updates
+		_, err := etchsketchManager.HandleDeviceUpdates("device", msgPayload)
+		if err != nil {
+			fmt.Printf("Error handling device updates: %v\n", err)
+		}
+
+	case messaging.MSG_TYPE_SHARED_VIEW_FRAME:
+		// This is sent from server only, devices shouldn't send this
+		fmt.Println("Warning: received frame message from device (server-only message)")
+
+	default:
+		fmt.Printf("Unknown etchsketch message type: 0x%02X\n", msgType)
+	}
 }
 
 // Handler responds to mqtt messages for following topics
@@ -186,15 +338,20 @@ var msg_handler MQTT.MessageHandler = func(client MQTT.Client, msg MQTT.Message)
 	payload := msg.Payload()
 
 	if topic == TopicBootup {
+		fmt.Printf("Received bootup message on %s (bytes=%d)\n", TopicBootup, len(payload))
 		handle_device_bootup(payload)
 	}
 
 	// Device heartbeat - keep device marked as active
 	if topic == TopicHeartbeat {
-		deviceName := string(payload)
-		if deviceName != "" {
+		deviceName, err := parseHeartbeatMessage(payload)
+		if err != nil {
+			fmt.Printf("Error parsing heartbeat message: %v\n", err)
+		} else if deviceName != "" {
 			devices.Heartbeat(deviceName)
 			fmt.Printf("Heartbeat received from %s\n", deviceName)
+			// Respond with version notification on every heartbeat
+			publish_version_notification(deviceName)
 		}
 	}
 
@@ -204,6 +361,11 @@ var msg_handler MQTT.MessageHandler = func(client MQTT.Client, msg MQTT.Message)
 		if deviceName != "" {
 			devices.SetInactive(deviceName)
 		}
+	}
+
+	// Etchsketch shared view messages
+	if topic == etchsketchTopic && etchsketchManager != nil {
+		handle_etchsketch_message(payload)
 	}
 }
 
@@ -225,6 +387,8 @@ func task_weather() {
 				fmt.Printf("Fetching current weather for %d zipcode(s)\n", len(activeZipcodes))
 				for _, zip := range activeZipcodes {
 					fetch_weather("current_weather", zip)
+					// Publish immediately so devices receive refreshed data without waiting for reboot
+					publish_weather("current_weather", zip)
 					time.Sleep(1 * time.Second)
 				}
 			}
@@ -238,6 +402,7 @@ func task_weather() {
 				fmt.Printf("Fetching forecast for %d zipcode(s)\n", len(activeZipcodes))
 				for _, zip := range activeZipcodes {
 					fetch_weather("forecast_weather", zip)
+					publish_weather("forecast_weather", zip)
 					time.Sleep(1 * time.Second)
 				}
 			}
@@ -281,10 +446,20 @@ func pingHealthcheck(client *http.Client, url string) error {
 func start_mqtt_process() {
 	messaging.Create_client(msg_handler, []string{TopicBootup, TopicTest}, IsDebugBuild)
 
+	// Initialize etchsketch manager
+	if IsDebugBuild {
+		etchsketchTopic = "debug_shared_view"
+	} else {
+		etchsketchTopic = "shared_view"
+	}
+	etchsketchManager = etchsketch.NewManager(messaging.GetClient(), etchsketchTopic)
+
 	// Subscribe to device offline topic (Last Will Testament from devices)
 	messaging.Subscribe(TopicOffline, msg_handler)
 	// Subscribe to heartbeat topic for device keepalives
 	messaging.Subscribe(TopicHeartbeat, msg_handler)
+	// Subscribe to etchsketch shared view topic
+	messaging.Subscribe(etchsketchTopic, msg_handler)
 }
 
 func main() {
@@ -314,6 +489,15 @@ func main() {
 		fmt.Printf("Warning: failed to initialize weather storage: %v\n", err)
 	}
 
+	// Load runtime config
+	if err := loadRuntimeConfig(); err != nil {
+		fmt.Printf("Warning: failed to load runtime config: %v (using defaults)\n", err)
+		// Set default version
+		configMutex.Lock()
+		runtimeConfig.DeviceVersion = "1.0.0"
+		configMutex.Unlock()
+	}
+
 	wait_for_current_time() // Channel to signal when to stop process
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
@@ -323,6 +507,9 @@ func main() {
 
 	// Get weather every x minutes
 	go task_weather()
+
+	// Reload runtime config every 15 minutes
+	go task_reload_config()
 
 	start_mqtt_process()
 

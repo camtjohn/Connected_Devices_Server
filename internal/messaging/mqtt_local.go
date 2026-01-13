@@ -15,8 +15,9 @@ var client MQTT.Client
 
 func Create_client(handler MQTT.MessageHandler, initialTopics []string, isDebug bool) {
 	fmt.Println("Starting create client")
-
+	// Use local broker on the same machine
 	broker := "ssl://localhost:8883"
+	fmt.Printf("Using MQTT broker: %s\n", broker)
 	// include host in clientID to avoid collisions that cause broker to drop connections
 	hostname, _ := os.Hostname()
 
@@ -27,6 +28,7 @@ func Create_client(handler MQTT.MessageHandler, initialTopics []string, isDebug 
 	} else {
 		clientID = "go-server-" + hostname
 	}
+	fmt.Printf("MQTT client ID: %s\n", clientID)
 
 	caPath := "./certs/ca.crt"
 	certPath := "./certs/client_server.crt"
@@ -59,8 +61,8 @@ func Create_client(handler MQTT.MessageHandler, initialTopics []string, isDebug 
 	opts := MQTT.NewClientOptions()
 	opts.AddBroker(broker)
 	opts.SetClientID(clientID)
-	// Keep session persistent so broker won't drop subscriptions on reconnect
-	opts.SetCleanSession(false)
+	// Use CleanSession=true to avoid queued message backlog on server restart
+	opts.SetCleanSession(true)
 	// tune keepalive/ping timeouts
 	opts.SetKeepAlive(60 * time.Second)
 	opts.SetPingTimeout(10 * time.Second)
@@ -74,8 +76,10 @@ func Create_client(handler MQTT.MessageHandler, initialTopics []string, isDebug 
 	// OnConnect handler — subscribes to topics every time client connects
 	opts.OnConnect = func(c MQTT.Client) {
 		fmt.Println("Connected to MQTT broker, subscribing to topics...")
+		fmt.Printf("Session clean: %v, KeepAlive: %s\n", opts.CleanSession, opts.KeepAlive)
 
 		for _, topic := range initialTopics {
+			fmt.Printf("Attempting to subscribe to %s\n", topic)
 			if token := c.Subscribe(topic, 1, handler); token.Wait() && token.Error() != nil {
 				log.Printf("Failed to subscribe to %s: %v", topic, token.Error())
 			} else {
@@ -93,23 +97,62 @@ func Create_client(handler MQTT.MessageHandler, initialTopics []string, isDebug 
 	}
 }
 
-func Publish(topic string, data []byte) {
-	fmt.Printf("Publishing to %s\n", topic)
+// PublishQoS0 publishes a message with QoS 0 (fire-and-forget)
+// Used for high-frequency messages like weather and shared view updates
+func PublishQoS0(topic string, data []byte) {
+	// Decode and log message details for debugging
+	msgType, payload, err := DecodeMessage(data)
+	if err == nil {
+		fmt.Printf("Publishing to %s (QoS 0) — Type: 0x%02X, PayloadLen: %d\n", topic, msgType, len(payload))
+	} else {
+		fmt.Printf("Publishing to %s (QoS 0) — Decode error: %v\n", topic, err)
+	}
 	if client == nil || !client.IsConnected() {
 		log.Printf("MQTT client not connected; skipping publish to %s", topic)
 		return
 	}
-	token := client.Publish(topic, 1, false, data)
-	token.Wait()
+	token := client.Publish(topic, 0, false, data)
+	if !token.WaitTimeout(5 * time.Second) {
+		log.Printf("Publish timeout to %s (QoS 0)", topic)
+	}
 	if token.Error() != nil {
 		log.Printf("Publish error: %v", token.Error())
 	}
 }
 
-// PublishRetained publishes a message with the retained flag set
+// PublishQoS1 publishes a message with QoS 1 (at least once delivery)
+// Used for critical messages like version updates and device-specific messages
+func PublishQoS1(topic string, data []byte) {
+	// Decode and log message details for debugging
+	msgType, payload, err := DecodeMessage(data)
+	if err == nil {
+		fmt.Printf("Publishing to %s (QoS 1) — Type: 0x%02X, PayloadLen: %d\n", topic, msgType, len(payload))
+	} else {
+		fmt.Printf("Publishing to %s (QoS 1) — Decode error: %v\n", topic, err)
+	}
+	if client == nil || !client.IsConnected() {
+		log.Printf("MQTT client not connected; skipping publish to %s", topic)
+		return
+	}
+	token := client.Publish(topic, 1, false, data)
+	if !token.WaitTimeout(15 * time.Second) {
+		log.Printf("Publish timeout to %s (QoS 1)", topic)
+	}
+	if token.Error() != nil {
+		log.Printf("Publish error: %v", token.Error())
+	}
+}
+
+// Publish publishes a message with default QoS 1
+// Deprecated: use PublishQoS0 or PublishQoS1 instead
+func Publish(topic string, data []byte) {
+	PublishQoS1(topic, data)
+}
+
+// PublishRetained publishes a message with the retained flag set and QoS 1
 // Useful for last weather state so ESP32 devices get it immediately on connect
 func PublishRetained(topic string, data []byte) {
-	fmt.Printf("Publishing retained to %s\n", topic)
+	fmt.Printf("Publishing retained to %s (QoS 1)\n", topic)
 	if client == nil || !client.IsConnected() {
 		log.Printf("MQTT client not connected; skipping publish to %s", topic)
 		return
@@ -136,11 +179,17 @@ func Subscribe(topic string, handler MQTT.MessageHandler) {
 		log.Printf("MQTT client not connected; skipping subscribe to %s", topic)
 		return
 	}
+	fmt.Printf("Attempting to subscribe to %s\n", topic)
 	token := client.Subscribe(topic, 1, handler)
 	token.Wait()
 	if token.Error() != nil {
-		log.Printf("Subscribe error: %v", token.Error())
+		log.Printf("Subscribe error to %s: %v", topic, token.Error())
 	} else {
 		fmt.Printf("Subscribed to %s\n", topic)
 	}
+}
+
+// GetClient returns the MQTT client instance
+func GetClient() MQTT.Client {
+	return client
 }
