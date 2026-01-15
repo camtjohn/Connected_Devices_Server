@@ -112,12 +112,13 @@ func (c *Canvas) EncodeFullFrame() []byte {
 
 // EncodeUpdates encodes a batch of pixel updates as an update message
 // Returns byte array: [type(0x22)][length][seq][count][pixels...]
+// Each pixel is packed: row (upper 4 bits) + col (lower 4 bits), followed by color byte
 func EncodeUpdates(seq uint16, updates []PixelUpdate) []byte {
 	if len(updates) > 32 {
 		updates = updates[:32] // Truncate to max 32 updates
 	}
 
-	payloadLen := 3 + (len(updates) * 3) // 3 bytes seq+count, 3 bytes per pixel
+	payloadLen := 3 + (len(updates) * 2) // 3 bytes seq+count, 2 bytes per pixel (packed row/col + color)
 	msg := make([]byte, 2+payloadLen)
 
 	msg[0] = 0x22              // MSG_TYPE_SHARED_VIEW_UPDATES
@@ -125,38 +126,44 @@ func EncodeUpdates(seq uint16, updates []PixelUpdate) []byte {
 	binary.BigEndian.PutUint16(msg[2:4], seq)
 	msg[4] = uint8(len(updates))
 
-	// Encode pixels
+	// Encode pixels with row/col packed into single byte
 	offset := 5
 	for _, pixel := range updates {
-		msg[offset] = pixel.Row
-		msg[offset+1] = pixel.Col
-		msg[offset+2] = pixel.Color
-		offset += 3
+		// Pack row (upper 4 bits) and col (lower 4 bits) into single byte
+		rowColByte := (pixel.Row & 0x0F << 4) | (pixel.Col & 0x0F)
+		msg[offset] = rowColByte
+		msg[offset+1] = pixel.Color
+		offset += 2
 	}
 
 	return msg
 }
 
 // DecodeUpdates parses a raw update message and returns the sequence number and pixel updates
+// Handles new protocol where row and col are packed into single byte (row in upper 4 bits, col in lower 4 bits)
 func DecodeUpdates(payload []byte) (uint16, []PixelUpdate, error) {
-	if len(payload) < 4 {
+	if len(payload) < 3 {
 		return 0, nil, ErrInvalidPayload
 	}
 
 	seq := binary.BigEndian.Uint16(payload[0:2])
 	count := payload[2]
 
-	if len(payload) < 3+(int(count)*3) {
+	if len(payload) < 3+(int(count)*2) {
 		return 0, nil, ErrInvalidPayload
 	}
 
 	updates := make([]PixelUpdate, count)
 	for i := 0; i < int(count); i++ {
-		offset := 3 + (i * 3)
+		offset := 3 + (i * 2)
+		rowColByte := payload[offset]
+		// Unpack row (upper 4 bits) and col (lower 4 bits)
+		row := (rowColByte >> 4) & 0x0F
+		col := rowColByte & 0x0F
 		updates[i] = PixelUpdate{
-			Row:   payload[offset],
-			Col:   payload[offset+1],
-			Color: payload[offset+2],
+			Row:   row,
+			Col:   col,
+			Color: payload[offset+1],
 		}
 	}
 
