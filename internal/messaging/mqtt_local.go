@@ -31,8 +31,8 @@ func Create_client(handler MQTT.MessageHandler, initialTopics []string, isDebug 
 	fmt.Printf("MQTT client ID: %s\n", clientID)
 
 	caPath := "./certs/ca.crt"
-	certPath := "./certs/client_server.crt"
-	keyPath := "./certs/client_server.key"
+	certPath := "./certs/jbar_server.crt"
+	keyPath := "./certs/jbar_server.key"
 
 	// Load CA cert
 	caCert, err := os.ReadFile(caPath)
