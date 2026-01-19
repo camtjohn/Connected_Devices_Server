@@ -171,16 +171,20 @@ case messaging.MSG_VERSION:
 
 Messages are published to specific MQTT topics:
 
-- **Weather**: `weather/<zipcode>` 
+- **Weather**: `weather/<zipcode>` (or `debug_weather/<zipcode>` in debug builds)
   - Can receive MSG_CURRENT_WEATHER or MSG_FORECAST_WEATHER
-- **Device Commands**: `<device_name>`
+- **Device Commands**: `<device_name>` (or `debug_<device_name>` in debug builds)
   - Can receive MSG_VERSION or other device-specific messages
-- **Device Bootup**: `dev/bootup`
-  - Payload format: `"device_name,zipcode"` (string)
-- **Heartbeat**: `dev/heartbeat`
-  - Payload: Device name (string)
-- **Offline**: `dev/offline`
-  - Payload: Device name (string)
+- **Device Bootup**: `dev_bootup` (or `debug_dev_bootup` in debug builds)
+  - Device sends MSG_DEVICE_CONFIG with device info
+- **Heartbeat**: `dev_heartbeat` (or `debug_dev_heartbeat` in debug builds)
+  - Device sends periodic heartbeat with device name
+- **Offline**: `device_offline` (or `debug_device_offline` in debug builds)
+  - Device Last Will Testament triggered on ungraceful disconnect
+- **Shared View**: `shared_view` (or `debug_shared_view` in debug builds)
+  - Device sends MSG_TYPE_SHARED_VIEW_REQ (0x20) to request full canvas
+  - Server responds with MSG_TYPE_SHARED_VIEW_FRAME (0x21) containing full canvas state
+  - Device sends MSG_TYPE_SHARED_VIEW_FRAME when it updates the canvas (server receives but doesn't respond)
 
 ## Implementation Notes
 
@@ -190,3 +194,4 @@ Messages are published to specific MQTT topics:
 - Current weather uses **offset encoding** (+50) to handle negative temps as uint8
 - Forecast temperatures are stored directly as uint8 (0-255°F range)
 - Moon phase uses simplified 3-state indicator for display purposes
+- Shared view uses full frame updates only - no incremental updates

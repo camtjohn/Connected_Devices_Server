@@ -316,16 +316,9 @@ func handle_etchsketch_message(payload []byte) {
 			fmt.Printf("Error handling sync request: %v\n", err)
 		}
 
-	case messaging.MSG_TYPE_SHARED_VIEW_UPDATES:
-		// Device sending pixel updates
-		_, err := etchsketchManager.HandleDeviceUpdates("device", msgPayload)
-		if err != nil {
-			fmt.Printf("Error handling device updates: %v\n", err)
-		}
-
 	case messaging.MSG_TYPE_SHARED_VIEW_FRAME:
-		// This is sent from server only, devices shouldn't send this
-		fmt.Println("Warning: received frame message from device (server-only message)")
+		// Device sending updated frame - no response needed, just log it
+		fmt.Printf("Received frame update from device (%d bytes)\n", len(msgPayload))
 
 	default:
 		fmt.Printf("Unknown etchsketch message type: 0x%02X\n", msgType)

@@ -13,9 +13,8 @@ const (
 	MSG_DEVICE_CONFIG    = 0x03
 	MSG_VERSION          = 0x10
 	// Etchsketch shared view messages
-	MSG_TYPE_SHARED_VIEW_REQ     = 0x20
-	MSG_TYPE_SHARED_VIEW_FRAME   = 0x21
-	MSG_TYPE_SHARED_VIEW_UPDATES = 0x22
+	MSG_TYPE_SHARED_VIEW_REQ   = 0x20
+	MSG_TYPE_SHARED_VIEW_FRAME = 0x21
 )
 
 // Protocol constraints for ESP32 compatibility
