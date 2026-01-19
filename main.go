@@ -447,6 +447,9 @@ func start_mqtt_process() {
 	}
 	etchsketchManager = etchsketch.NewManager(messaging.GetClient(), etchsketchTopic)
 
+	// Clear retained shared view frames so devices don't receive unsolicited frames on boot
+	messaging.PublishRetained(etchsketchTopic, []byte{})
+
 	// Subscribe to device offline topic (Last Will Testament from devices)
 	messaging.Subscribe(TopicOffline, msg_handler)
 	// Subscribe to heartbeat topic for device keepalives
