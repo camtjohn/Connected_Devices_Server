@@ -10,7 +10,9 @@ const (
 	TopicOffline       = "device_offline"
 	TopicTest          = "test_msg"
 	TopicWeatherPrefix = "weather"
-	IsDebugBuild       = false
+	// Etch Sketch shared canvas topic
+	TopicEtchSketch = "etch_sketch"
+	IsDebugBuild    = false
 
 	// Weather timing (in minutes)
 	WeatherUpdateInterval  = 30  // Fetch current weather every 30 minutes

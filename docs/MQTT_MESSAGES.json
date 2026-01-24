@@ -1,0 +1,135 @@
+{
+    "protocol_version": "1.0",
+    "note": "All topics use 'debug_' prefix when DEBUG_BUILD is defined (e.g., debug_weather/60607). All messages start with 2-byte header: [Type][Length] followed by payload.",
+    "topics": {
+        "weather/<zipcode>": {
+            "message types": {
+                "current_weather": {
+                    "type": "0x01"
+                },
+                "forecast_weather": {
+                    "type": "0x02"
+                }
+            }
+        },
+        "<device_name>": {
+            "message types": {
+                "version": {
+                    "type": "0x10"
+                }
+            }
+        },
+        "dev_bootup": {
+            "message types": {
+                "device_config": {
+                    "type": "0x03"
+                }
+            }
+        },
+        "dev_heartbeat": {
+            "message types": {
+                "heartbeat": {
+                    "type": "0x11"
+                }
+            }
+        },
+        "etch_sketch": {
+            "message types": {
+                "etch_get_frame": {
+                    "type": "0x20"
+                },
+                "etch_update_frame": {
+                    "type": "0x21"
+                }
+            }
+        }
+    },
+  
+    "message types": {
+        "current_weather": {
+            "type": "0x01",
+            "payload_length": 1,
+            "payload_schema": [
+                { "name": "temperature", "type": "uint8", "encoding": "actual_temp_f + 50" }
+            ],
+            "examples": [
+                { "actual_temp_f": 50, "bytes_hex": "01 01 64" },
+                { "actual_temp_f": 20, "bytes_hex": "01 01 46" }
+            ]
+        },
+        "forecast_weather": {
+            "type": "0x02",
+            "payload_length": "1 + 3 * num_days",
+            "payload_schema": [
+                { "name": "num_days", "type": "uint8", "range": "1-7" },
+                { "name": "high_temp", "type": "uint8", "units": "F" },
+                { "name": "precip_pct", "type": "uint8", "units": "%" },
+                { "name": "moon_phase", "type": "uint8", "enum": { "0": "<93%", "1": "93-99%", "2": "100%" } }
+            ],
+            "examples": [
+                { "num_days": 3, "bytes_hex": "02 0A 03 4B 14 01 50 00 02 4E 32 00" }
+            ]
+        },
+        "version": {
+            "type": "0x10",
+            "payload_length": 2,
+            "payload_schema": [
+                { "name": "version", "type": "uint16", "byte_order": "big-endian" }
+            ],
+            "examples": [
+                { "version": 5, "bytes_hex": "10 02 00 05" }
+            ]
+        },
+        "device_config": {
+            "type": "0x03",
+            "payload_length": "3 + sum(1 + strlen(string_i))",
+            "payload_schema": [
+                { "name": "string_count", "type": "uint8" },
+                {
+                "name": "strings",
+                "type": "array",
+                "length": "string_count",
+                "item_schema": [
+                    { "name": "len", "type": "uint8" },
+                    { "name": "data", "type": "utf8" }
+                ]
+                }
+            ],
+            "examples": [
+                { "strings": ["dev0", "60607"], "bytes_hex": "03 09 02 04 64 65 76 30 05 36 30 36 30 37" }
+            ]
+        },
+        "heartbeat": {
+            "type": "0x11",
+            "payload_length": "1 + strlen(device_name)",
+            "payload_schema": [
+                { "name": "device_name_len", "type": "uint8" },
+                { "name": "device_name", "type": "utf8" }
+            ],
+            "examples": [
+                { "device_name": "dev02", "bytes_hex": "11 06 05 64 65 76 30 32" }
+            ]
+        },
+        "etch_get_frame": {
+            "type": "0x20",
+            "payload_length": 0,
+            "payload_schema": [],
+            "note": "Message is just 2-byte header [0x20][0x00], no payload",
+            "examples": [
+                { "bytes_hex": "20 00" }
+            ]
+        },
+        "etch_update_frame": {
+            "type": "0x21",
+            "payload_length": 98,
+            "total_message_bytes": 100,
+            "note": "Total message = 2-byte header [0x21][0x62] + 98-byte payload (2 seq + 96 pixel data)",
+            "payload_schema": [
+                { "name": "seq", "type": "uint16", "byte_order": "big-endian" },
+                { "name": "red_rows", "type": "array", "length": 16, "item_type": "uint16", "byte_order": "native" },
+                { "name": "green_rows", "type": "array", "length": 16, "item_type": "uint16", "byte_order": "native" },
+                { "name": "blue_rows", "type": "array", "length": 16, "item_type": "uint16", "byte_order": "native" }
+            ]
+        }
+    }
+}

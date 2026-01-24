@@ -12,9 +12,11 @@ const (
 	MSG_FORECAST_WEATHER = 0x02
 	MSG_DEVICE_CONFIG    = 0x03
 	MSG_VERSION          = 0x10
-	// Etchsketch shared view messages
-	MSG_TYPE_SHARED_VIEW_REQ   = 0x20
-	MSG_TYPE_SHARED_VIEW_FRAME = 0x21
+	// Etch Sketch shared canvas messages
+	// Device requests the current full frame
+	MSG_TYPE_ETCH_GET_FRAME = 0x20
+	// Device publishes a full frame update
+	MSG_TYPE_ETCH_UPDATE_FRAME = 0x21
 )
 
 // Protocol constraints for ESP32 compatibility

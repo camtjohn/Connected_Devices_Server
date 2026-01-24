@@ -46,41 +46,15 @@ func (m *Manager) HandleSyncRequest(deviceID string) error {
 	return nil
 }
 
-// HandleDeviceUpdates applies device pixel updates to the canvas and broadcasts them
-// Returns the new sequence number
-func (m *Manager) HandleDeviceUpdates(deviceID string, payload []byte) (uint16, error) {
-	// Parse the update batch
-	deviceSeq, updates, err := DecodeUpdates(payload)
-	if err != nil {
-		return 0, fmt.Errorf("failed to decode updates from device %s: %w", deviceID, err)
-	}
+// Removed legacy incremental update handler (pixel-level updates) —
+// protocol now uses full-frame publish by devices.
 
-	// Apply updates to the canonical canvas
-	newSeq := m.canvas.ApplyUpdates(updates)
-
-	// Republish full frame as retained message with new sequence (QoS 0 per protocol)
-	frame := m.canvas.EncodeFullFrame()
-	fmt.Printf("Publishing updated frame to %s (seq=%d, %d bytes, QoS 0, retained)\n", m.topic, newSeq, len(frame))
-	token := m.client.Publish(m.topic, 0, true, frame)
-	if !token.WaitTimeout(5000) {
-		return newSeq, fmt.Errorf("timeout publishing updated frame from device %s", deviceID)
-	}
-	if token.Error() != nil {
-		return newSeq, fmt.Errorf("failed to publish frame after update from device %s: %w", deviceID, token.Error())
-	}
-
-	// Broadcast pixel updates to all other devices with the new sequence number (QoS 0 per protocol)
-	updateMsg := EncodeUpdates(newSeq, updates)
-	token = m.client.Publish(m.topic, 0, false, updateMsg)
-	if !token.WaitTimeout(5000) {
-		return newSeq, fmt.Errorf("timeout broadcasting updates from device %s", deviceID)
-	}
-	if token.Error() != nil {
-		return newSeq, fmt.Errorf("failed to broadcast updates from device %s: %w", deviceID, token.Error())
-	}
-
-	fmt.Printf("Device %s: %d pixels applied (device_seq=%d, new_seq=%d)\n", deviceID, len(updates), deviceSeq, newSeq)
-	return newSeq, nil
+// HandleFullFrameUpdate ingests a full-frame update published by a device
+// The server does not republish this frame; it only updates its local state
+func (m *Manager) HandleFullFrameUpdate(seq uint16, red [16]uint16, green [16]uint16, blue [16]uint16) {
+	m.canvas.SetState(seq, red, green, blue)
+	m.lastSeenSeq = seq
+	fmt.Printf("EtchSketch: applied full frame (seq=%d)\n", seq)
 }
 
 // RegisterDevice tracks a device as connected to the etchsketch view

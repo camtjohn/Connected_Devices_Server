@@ -309,16 +309,26 @@ func handle_etchsketch_message(payload []byte) {
 	msgPayload := payload[2 : 2+msgLen]
 
 	switch msgType {
-	case messaging.MSG_TYPE_SHARED_VIEW_REQ:
+	case messaging.MSG_TYPE_ETCH_GET_FRAME:
 		// Device requesting full canvas state
 		fmt.Println("Received etchsketch sync request")
 		if err := etchsketchManager.HandleSyncRequest("device"); err != nil {
 			fmt.Printf("Error handling sync request: %v\n", err)
 		}
 
-	case messaging.MSG_TYPE_SHARED_VIEW_FRAME:
-		// Device sending updated frame - no response needed, just log it
-		fmt.Printf("Received frame update from device (%d bytes)\n", len(msgPayload))
+	case messaging.MSG_TYPE_ETCH_UPDATE_FRAME:
+		// Device publishes updated full frame; server updates local state only
+		if len(msgPayload) != 98 {
+			fmt.Printf("Invalid etch_update_frame payload length: %d (expected 98)\n", len(msgPayload))
+			return
+		}
+		seq, red, green, blue, err := etchsketch.DecodeFullFrame(msgPayload)
+		if err != nil {
+			fmt.Printf("Failed to decode full frame: %v\n", err)
+			return
+		}
+		etchsketchManager.HandleFullFrameUpdate(seq, red, green, blue)
+		fmt.Printf("Applied etch_update_frame (seq=%d)\n", seq)
 
 	default:
 		fmt.Printf("Unknown etchsketch message type: 0x%02X\n", msgType)
@@ -439,12 +449,8 @@ func pingHealthcheck(client *http.Client, url string) error {
 func start_mqtt_process() {
 	messaging.Create_client(msg_handler, []string{TopicBootup, TopicTest}, IsDebugBuild)
 
-	// Initialize etchsketch manager
-	if IsDebugBuild {
-		etchsketchTopic = "debug_shared_view"
-	} else {
-		etchsketchTopic = "shared_view"
-	}
+	// Initialize etchsketch manager on configured topic
+	etchsketchTopic = TopicEtchSketch
 	etchsketchManager = etchsketch.NewManager(messaging.GetClient(), etchsketchTopic)
 
 	// Clear retained shared view frames so devices don't receive unsolicited frames on boot
