@@ -22,7 +22,7 @@ echo.
 REM Clean previous builds
 echo Cleaning previous builds...
 if exist "%PROJECT_NAME%_debug" del "%PROJECT_NAME%_debug"
-if exist "%PROJECT_NAME%_prod" del "%PROJECT_NAME%_prod"
+if exist "%PROJECT_NAME%" del "%PROJECT_NAME%"
 echo [OK] Clean complete
 echo.
 
@@ -50,22 +50,22 @@ if "%BUILD_TYPE%"=="debug" (goto end) else if "%BUILD_TYPE%"=="both" (
 
 set GOOS=%TARGET_OS%
 set GOARCH=%TARGET_ARCH%
-go build -o "%PROJECT_NAME%_prod" -v
+go build -o "%PROJECT_NAME%" -v
 if errorlevel 1 (
     echo [FAILED] Production build failed
     exit /b 1
 )
-echo [OK] Production build complete: %PROJECT_NAME%_prod
+echo [OK] Production build complete: %PROJECT_NAME%
 echo.
 
 :end
 echo === Build Summary ===
 echo Location: %cd%
-dir /b "%PROJECT_NAME%_*" 2>nul
+dir /b "%PROJECT_NAME%*" 2>nul
 echo.
 echo To deploy to Oracle VM:
 echo   scp -i ^<keyfile^> %PROJECT_NAME%_debug ubuntu@^<vm-ip^>:~/server_app/
-echo   scp -i ^<keyfile^> %PROJECT_NAME%_prod ubuntu@^<vm-ip^>:~/server_app/
+echo   scp -i ^<keyfile^> %PROJECT_NAME% ubuntu@^<vm-ip^>:~/server_app/
 echo.
 echo To run on VM:
 echo   ssh ubuntu@^<vm-ip^> '~/server_app/%PROJECT_NAME%_debug'

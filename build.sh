@@ -18,7 +18,7 @@ echo ""
 
 # Clean previous builds
 echo "Cleaning previous builds..."
-rm -f "${PROJECT_NAME}_debug" "${PROJECT_NAME}_prod"
+rm -f "${PROJECT_NAME}_debug" "${PROJECT_NAME}_prod" "${PROJECT_NAME}"
 echo "✓ Clean complete"
 echo ""
 
@@ -35,20 +35,20 @@ fi
 # Build Production
 if [[ "$BUILD_TYPE" == "prod" || "$BUILD_TYPE" == "both" ]]; then
     echo "Building PRODUCTION version..."
-    GOOS=$TARGET_OS GOARCH=$TARGET_ARCH go build -o "${PROJECT_NAME}_prod" -v
-    chmod +x "${PROJECT_NAME}_prod"
-    SIZE=$(ls -lh "${PROJECT_NAME}_prod" | awk '{print $5}')
-    echo "✓ Production build complete: ${PROJECT_NAME}_prod ($SIZE)"
+    GOOS=$TARGET_OS GOARCH=$TARGET_ARCH go build -o "${PROJECT_NAME}" -v
+    chmod +x "${PROJECT_NAME}"
+    SIZE=$(ls -lh "${PROJECT_NAME}" | awk '{print $5}')
+    echo "✓ Production build complete: ${PROJECT_NAME} ($SIZE)"
     echo ""
 fi
 
 echo "=== Build Summary ==="
 echo "Location: $(pwd)"
-ls -lh "${PROJECT_NAME}"_* 2>/dev/null | awk '{print "  " $9 " (" $5 ")"}'
+ls -lh "${PROJECT_NAME}" "${PROJECT_NAME}"_* 2>/dev/null | awk '{print "  " $9 " (" $5 ")"}'
 echo ""
 echo "To deploy to Oracle VM:"
 echo "  scp -i <keyfile> ${PROJECT_NAME}_debug ubuntu@<vm-ip>:~/server_app/"
-echo "  scp -i <keyfile> ${PROJECT_NAME}_prod ubuntu@<vm-ip>:~/server_app/"
+echo "  scp -i <keyfile> ${PROJECT_NAME} ubuntu@<vm-ip>:~/server_app/"
 echo ""
 echo "To run on VM:"
 echo "  ssh ubuntu@<vm-ip> '~/server_app/${PROJECT_NAME}_debug'"

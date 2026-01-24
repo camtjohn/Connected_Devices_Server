@@ -325,45 +325,9 @@ Binary Message (abbreviated):
 
 ---
 
-#### 4c. Shared View Updates (Incremental)
-**Direction:** Server/Device → Devices  
-**Topic:** `shared_view`  
-**Message Type:** `0x22` (MSG_TYPE_SHARED_VIEW_UPDATES)
-
-**Format:**
-```
-[0x22][Length]
-  [Seq_High][Seq_Low]
-  [Count]
-  [Row][Col][Color]  // Repeat Count times
-  ...
-```
-
-**Fields:**
-- `Seq`: 16-bit sequence number (big-endian)
-- `Count`: Number of pixel updates
-- `Row`: 0-15
-- `Col`: 0-15
-- `Color`: 0=Red, 1=Green, 2=Blue
-
-**Example (2 pixels):**
-```
-Sequence: 1001
-Pixel 1: row=5, col=10, color=Red(0)
-Pixel 2: row=7, col=3, color=Blue(2)
-
-Binary Message:
-[0x22][0x08]     // Type and length
-[0x03][0xE9]     // Sequence 1001
-[0x02]           // 2 updates
-[0x05][0x0A][0x00]  // Pixel 1
-[0x07][0x03][0x02]  // Pixel 2
-```
-
-**Synchronization:**
-- Devices track last received sequence number
-- If sequence gap detected (seq != last_seq + 1), device sends Shared View Request
-- Server/publisher responds with full frame (0x21)
+#### 4c. Etch Sketch Protocol Summary
+Only full-frame messages are used; no pixel-level incremental updates.
+Devices request current frame with `0x20` and publish full frames using `0x21`.
 
 ---
 
@@ -377,7 +341,7 @@ Binary Message:
 | `dev_bootup` | Device → Server | Device registration (0x03) | 1 |
 | `dev_heartbeat` | Device → Server | Periodic heartbeat (future) | 0 |
 | `device_offline` | Device → Server | LWT message (future) | 1 |
-| `shared_view` | Bidirectional | Shared canvas (0x20, 0x21, 0x22) | 0 |
+| `etch_sketch` | Bidirectional | Etch canvas (0x20, 0x21) | 0 |
 | `debug` | Device → Server | Debug messages (text) | 1 |
 
 ### Debug Topics (DEBUG_BUILD flag enabled)
@@ -387,7 +351,7 @@ All production topics prefixed with `debug_`:
 - `debug_dev_bootup`
 - `debug_dev_heartbeat`
 - `debug_device_offline`
-- `debug_shared_view`
+- `debug_etch_sketch`
 - `debug_test_msg`
 
 **Server Implementation Note:** Support both production and debug topic schemes for development/testing environments.
@@ -573,9 +537,8 @@ client.disconnect()
 | Forecast Weather | 0x02 | MSG_TYPE_FORECAST_WEATHER | Server → Device | 1 + (3×days) |
 | Device Config | 0x03 | MSG_TYPE_DEVICE_CONFIG | Device → Server | Variable |
 | Version | 0x10 | MSG_TYPE_VERSION | Server → Device | 1 byte |
-| Shared View Request | 0x20 | MSG_TYPE_SHARED_VIEW_REQ | Bidirectional | 0 bytes |
-| Shared View Frame | 0x21 | MSG_TYPE_SHARED_VIEW_FRAME | Bidirectional | 98 bytes |
-| Shared View Updates | 0x22 | MSG_TYPE_SHARED_VIEW_UPDATES | Bidirectional | 3 + (3×count) |
+| Etch Get Frame | 0x20 | MSG_TYPE_ETCH_GET_FRAME | Bidirectional | 0 bytes |
+| Etch Update Frame | 0x21 | MSG_TYPE_ETCH_UPDATE_FRAME | Bidirectional | 98 bytes |
 
 ### Temperature Encoding
 - **Current Weather**: `encoded = actual + 50`

@@ -2,7 +2,6 @@ internal/weather_data/
 
 server_app
 server_app_debug
-server_app_prod
 *.exe
 
 certs/
